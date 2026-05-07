@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quản Lý Uống Thuốc</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen font-sans">
+  <header class="bg-white shadow-lg rounded-b-2xl mx-4 mt-4 p-6 transform hover:scale-105 transition-transform duration-300">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-12 h-12 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-2xl shadow-lg">💊</div>
+        <h1 class="text-2xl font-bold text-gray-800">Quản Lý Uống Thuốc</h1>
+      </div>
+      <div class="flex items-center space-x-2" id="mqttStatus">
+        <div class="w-4 h-4 rounded-full shadow-md" id="mqttDot"></div>
+        <span class="text-sm font-medium" id="mqttLabel">Đang kết nối...</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="container mx-auto px-4 py-8 space-y-8">
+
+    <!-- TRẠNG THÁI 4 HỘP -->
+    <section class="bg-white rounded-2xl shadow-xl p-6 transform hover:shadow-2xl transition-shadow duration-300">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+        <span class="mr-2">📦</span> Trạng thái hộp thuốc
+      </h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="boxGrid">
+        <!-- Render bởi JS -->
+      </div>
+    </section>
+
+    <!-- CẤU HÌNH LỊCH UỐNG -->
+    <section class="bg-white rounded-2xl shadow-xl p-6 transform hover:shadow-2xl transition-shadow duration-300">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+        <span class="mr-2">⏰</span> Cấu hình lịch uống thuốc
+      </h2>
+
+      <div class="bg-gray-50 rounded-xl p-4 space-y-4">
+        <div class="flex items-center justify-between">
+          <label class="text-sm font-medium text-gray-700">Số lần uống mỗi ngày</label>
+          <div class="flex items-center space-x-2">
+            <button class="w-8 h-8 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors" id="decreaseBtn">−</button>
+            <span class="w-12 text-center font-bold text-lg" id="timesPerDayVal">2</span>
+            <button class="w-8 h-8 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors" id="increaseBtn">+</button>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <label class="text-sm font-medium text-gray-700" for="scheduleDate">Chọn ngày uống</label>
+          <input id="scheduleDate" class="border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" type="date" />
+        </div>
+
+        <div id="timeSlots" class="space-y-2">
+          <!-- Render bởi JS -->
+        </div>
+
+        <div class="flex items-center justify-between pt-4 border-t border-gray-200">
+          <button class="bg-gradient-to-r from-green-500 to-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-green-600 hover:to-blue-700 transform hover:scale-105 transition-all duration-200 shadow-lg" id="sendScheduleBtn">
+            Gửi lịch xuống ESP32
+          </button>
+          <span class="text-sm text-gray-600" id="sendFeedback"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- LỊCH THEO NGÀY -->
+    <section class="bg-white rounded-2xl shadow-xl p-6 transform hover:shadow-2xl transition-shadow duration-300">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+        <span class="mr-2">📅</span> Lịch theo ngày
+      </h2>
+      <div id="calendar" class="bg-gray-50 rounded-xl p-4 mb-4">
+        <!-- Calendar sẽ được render bởi JS -->
+      </div>
+      <div id="dayDetails" class="bg-blue-50 rounded-xl p-4">
+        <p class="text-gray-600">Chọn một ngày để xem chi tiết lịch uống thuốc.</p>
+      </div>
+    </section>
+
+    <!-- LỊCH ĐÃ GỬI -->
+    <section class="bg-white rounded-2xl shadow-xl p-6 transform hover:shadow-2xl transition-shadow duration-300">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+        <span class="mr-2">📋</span> Lịch đã gửi
+      </h2>
+      <div id="sentSchedules" class="space-y-3">
+        <p class="text-gray-500 italic">Chưa có lịch nào được gửi...</p>
+      </div>
+    </section>
+
+    <!-- LOG HOẠT ĐỘNG -->
+    <section class="bg-white rounded-2xl shadow-xl p-6 transform hover:shadow-2xl transition-shadow duration-300">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+        <span class="mr-2">📝</span> Nhật ký hoạt động
+      </h2>
+      <div class="bg-gray-50 rounded-xl p-4 h-64 overflow-y-auto" id="logBox">
+        <p class="text-gray-500 italic">Chưa có sự kiện nào...</p>
+      </div>
+      <button class="mt-4 bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 transition-colors" id="clearLogBtn">Xóa nhật ký</button>
+    </section>
+
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
