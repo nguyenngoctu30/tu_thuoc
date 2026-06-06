@@ -3,103 +3,206 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Quản Lý Uống Thuốc</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="description" content="Hệ thống quản lý hộp thuốc thông minh theo thời gian thực." />
+  <title>MedBox – Smart Medicine Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
 </head>
-<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen font-sans">
-  <header class="bg-white shadow-lg rounded-b-2xl mx-4 mt-4 p-6 transform hover:scale-105 transition-transform duration-300">
-    <div class="flex items-center justify-between">
-      <div class="flex items-center space-x-3">
-        <div class="w-12 h-12 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-2xl shadow-lg">💊</div>
-        <h1 class="text-2xl font-bold text-gray-800">Quản Lý Uống Thuốc</h1>
+<body>
+
+  <!-- Custom cursor -->
+  <div class="cursor-dot"  id="cursorDot"></div>
+  <div class="cursor-glow" id="cursorGlow"></div>
+
+  <!-- Background ambient orbs -->
+  <div class="bg-canvas" aria-hidden="true">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <!-- ─────────── HEADER ─────────── -->
+  <header class="header">
+    <div class="header-inner">
+
+      <div class="header-brand">
+        <div class="brand-logo">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/>
+            <path d="m8.5 8.5 7 7"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1 class="brand-name">MedBox</h1>
+          <p class="brand-sub">Smart Medicine Manager</p>
+        </div>
       </div>
-      <div class="flex items-center space-x-2" id="mqttStatus">
-        <div class="w-4 h-4 rounded-full shadow-md" id="mqttDot"></div>
-        <span class="text-sm font-medium" id="mqttLabel">Đang kết nối...</span>
+
+      <div class="mqtt-pill" id="mqttStatus">
+        <span class="dot dot--off" id="mqttDot"></span>
+        <span id="mqttLabel">Đang kết nối...</span>
       </div>
+
     </div>
+
+    <nav class="tab-nav">
+      <div class="tab-nav-inner">
+        <button class="tab-btn active" data-tab="dashboard" id="tab-btn-dashboard">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+          Tổng quan
+        </button>
+        <button class="tab-btn" data-tab="log" id="tab-btn-log">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          Nhật ký
+        </button>
+      </div>
+    </nav>
   </header>
 
-  <main class="container mx-auto px-4 py-8 space-y-8">
+  <main>
 
-    <!-- TRẠNG THÁI 4 HỘP -->
-    <section class="bg-white rounded-2xl shadow-xl p-6 transform hover:shadow-2xl transition-shadow duration-300">
-      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
-        <span class="mr-2">📦</span> Trạng thái hộp thuốc
-      </h2>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="boxGrid">
-        <!-- Render bởi JS -->
-      </div>
-    </section>
+    <!-- ══════════════ TAB: TỔNG QUAN ══════════════ -->
+    <div class="tab-content active" id="tab-dashboard">
+      <div class="container">
 
-    <!-- CẤU HÌNH LỊCH UỐNG -->
-    <section class="bg-white rounded-2xl shadow-xl p-6 transform hover:shadow-2xl transition-shadow duration-300">
-      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
-        <span class="mr-2">⏰</span> Cấu hình lịch uống thuốc
-      </h2>
-
-      <div class="bg-gray-50 rounded-xl p-4 space-y-4">
-        <div class="flex items-center justify-between">
-          <label class="text-sm font-medium text-gray-700">Số lần uống mỗi ngày</label>
-          <div class="flex items-center space-x-2">
-            <button class="w-8 h-8 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors" id="decreaseBtn">−</button>
-            <span class="w-12 text-center font-bold text-lg" id="timesPerDayVal">2</span>
-            <button class="w-8 h-8 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors" id="increaseBtn">+</button>
+        <!-- Trạng thái hộp thuốc -->
+        <section class="section">
+          <div class="section-header">
+            <div class="section-label-row">
+              <span class="section-eyebrow">Trạng thái</span>
+              <h2 class="section-title">Hộp thuốc</h2>
+            </div>
+            <span class="section-hint" id="boxesLastUpdate"></span>
           </div>
+          <div class="box-grid" id="boxGrid">
+            <!-- Render bởi JS -->
+          </div>
+        </section>
+
+        <!-- Two-col: Config + Calendar -->
+        <div class="two-col-grid">
+
+          <!-- Cấu hình lịch -->
+          <section class="section">
+            <div class="section-label-row" style="margin-bottom:1rem">
+              <span class="section-eyebrow">Thiết lập</span>
+              <h2 class="section-title">Lịch uống thuốc</h2>
+            </div>
+            <div class="glass-card">
+              <div class="config-row">
+                <span class="config-label">Số lần uống / ngày</span>
+                <div class="stepper">
+                  <button class="stepper-btn" id="decreaseBtn">−</button>
+                  <span class="stepper-val" id="timesPerDayVal">2</span>
+                  <button class="stepper-btn" id="increaseBtn">+</button>
+                </div>
+              </div>
+
+              <div class="config-row">
+                <span class="config-label">Ngày uống</span>
+                <input id="scheduleDate" class="field-input" type="date" />
+              </div>
+
+              <div class="glass-divider"></div>
+
+              <div id="timeSlots" class="time-slots"></div>
+
+              <div class="glass-divider"></div>
+
+              <div class="config-actions">
+                <button class="btn btn--glow" id="sendScheduleBtn">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                  Gửi xuống ESP32
+                </button>
+                <span class="send-feedback" id="sendFeedback">✓ Đã gửi</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- Lịch theo ngày -->
+          <section class="section">
+            <div class="section-label-row" style="margin-bottom:1rem">
+              <span class="section-eyebrow">Lịch biểu</span>
+              <h2 class="section-title">Theo ngày</h2>
+            </div>
+            <div class="glass-card">
+              <div id="calendar"></div>
+              <div class="glass-divider" style="margin:14px 0"></div>
+              <div id="dayDetails">
+                <p class="text-hint">Chọn một ngày để xem lịch.</p>
+              </div>
+            </div>
+          </section>
+
         </div>
 
-        <div class="flex items-center justify-between">
-          <label class="text-sm font-medium text-gray-700" for="scheduleDate">Chọn ngày uống</label>
-          <input id="scheduleDate" class="border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" type="date" />
-        </div>
+        <!-- Lịch đã gửi -->
+        <section class="section">
+          <div class="section-label-row" style="margin-bottom:1rem">
+            <span class="section-eyebrow">Lịch sử</span>
+            <h2 class="section-title">Lịch đã gửi</h2>
+          </div>
+          <div class="sent-schedules" id="sentSchedules">
+            <p class="no-schedules">Chưa có lịch nào được gửi...</p>
+          </div>
+        </section>
 
-        <div id="timeSlots" class="space-y-2">
-          <!-- Render bởi JS -->
-        </div>
+        <!-- Mini log -->
+        <section class="section">
+          <div class="section-header">
+            <div class="section-label-row">
+              <span class="section-eyebrow">Session</span>
+              <h2 class="section-title">Nhật ký phiên</h2>
+            </div>
+            <button class="ghost-btn" id="clearLogBtn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/></svg>
+              Xóa
+            </button>
+          </div>
+          <div class="log-box" id="logBox">
+            <p class="log-placeholder">Chưa có sự kiện nào...</p>
+          </div>
+        </section>
 
-        <div class="flex items-center justify-between pt-4 border-t border-gray-200">
-          <button class="bg-gradient-to-r from-green-500 to-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-green-600 hover:to-blue-700 transform hover:scale-105 transition-all duration-200 shadow-lg" id="sendScheduleBtn">
-            Gửi lịch xuống ESP32
-          </button>
-          <span class="text-sm text-gray-600" id="sendFeedback"></span>
-        </div>
       </div>
-    </section>
+    </div>
 
-    <!-- LỊCH THEO NGÀY -->
-    <section class="bg-white rounded-2xl shadow-xl p-6 transform hover:shadow-2xl transition-shadow duration-300">
-      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
-        <span class="mr-2">📅</span> Lịch theo ngày
-      </h2>
-      <div id="calendar" class="bg-gray-50 rounded-xl p-4 mb-4">
-        <!-- Calendar sẽ được render bởi JS -->
-      </div>
-      <div id="dayDetails" class="bg-blue-50 rounded-xl p-4">
-        <p class="text-gray-600">Chọn một ngày để xem chi tiết lịch uống thuốc.</p>
-      </div>
-    </section>
+    <!-- ══════════════ TAB: NHẬT KÝ ══════════════ -->
+    <div class="tab-content" id="tab-log">
+      <div class="container">
 
-    <!-- LỊCH ĐÃ GỬI -->
-    <section class="bg-white rounded-2xl shadow-xl p-6 transform hover:shadow-2xl transition-shadow duration-300">
-      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
-        <span class="mr-2">📋</span> Lịch đã gửi
-      </h2>
-      <div id="sentSchedules" class="space-y-3">
-        <p class="text-gray-500 italic">Chưa có lịch nào được gửi...</p>
-      </div>
-    </section>
+        <section class="section">
+          <div class="section-header">
+            <div class="section-label-row">
+              <span class="section-eyebrow">Firebase</span>
+              <h2 class="section-title">Nhật ký hoạt động</h2>
+            </div>
+            <span class="badge-count" id="logCount"></span>
+          </div>
 
-    <!-- LOG HOẠT ĐỘNG -->
-    <section class="bg-white rounded-2xl shadow-xl p-6 transform hover:shadow-2xl transition-shadow duration-300">
-      <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
-        <span class="mr-2">📝</span> Nhật ký hoạt động
-      </h2>
-      <div class="bg-gray-50 rounded-xl p-4 h-64 overflow-y-auto" id="logBox">
-        <p class="text-gray-500 italic">Chưa có sự kiện nào...</p>
+          <div class="log-filter-bar">
+            <div class="filter-group">
+              <button class="filter-btn active" data-filter="all"   id="filter-all">Tất cả</button>
+              <button class="filter-btn"         data-filter="ok"   id="filter-ok">✅ Thành công</button>
+              <button class="filter-btn"         data-filter="warn" id="filter-warn">⚠️ Cảnh báo</button>
+              <button class="filter-btn"         data-filter="error" id="filter-error">❌ Lỗi</button>
+            </div>
+            <div class="search-wrap">
+              <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" class="log-search" id="logSearch" placeholder="Tìm kiếm..." />
+            </div>
+          </div>
+
+          <div class="log-timeline" id="logTimeline">
+            <p class="log-placeholder">Đang tải từ Firebase...</p>
+          </div>
+        </section>
+
       </div>
-      <button class="mt-4 bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 transition-colors" id="clearLogBtn">Xóa nhật ký</button>
-    </section>
+    </div>
 
   </main>
 
