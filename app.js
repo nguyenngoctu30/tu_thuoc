@@ -1,36 +1,39 @@
-// ── FIREBASE ──────────────────────────────────────────────
+// ── FIREBASE ──────────────────────────────────────────────────────────────────
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-app.js";
-import { getDatabase, ref, push, set, get, remove } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-database.js";
+import {
+  getDatabase, ref, push, set, get, onValue
+} from "https://www.gstatic.com/firebasejs/12.6.0/firebase-database.js";
 
 const firebaseConfig = {
-    apiKey: "AIzaSyDzQFoQ8R023siAj2qaKVneQHu_BII1Zlc",
-    authDomain: "tuiot-ad770.firebaseapp.com",
-    databaseURL: "https://tuiot-ad770-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "tuiot-ad770",
-    storageBucket: "tuiot-ad770.firebasestorage.app",
-    messagingSenderId: "174269480706",
-    appId: "1:174269480706:web:96cbe14c0680f9f7c34c1b",
-    measurementId: "G-S1XNWLX6EY"
+  apiKey: "AIzaSyDzQFoQ8R023siAj2qaKVneQHu_BII1Zlc",
+  authDomain: "tuiot-ad770.firebaseapp.com",
+  databaseURL: "https://tuiot-ad770-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "tuiot-ad770",
+  storageBucket: "tuiot-ad770.firebasestorage.app",
+  messagingSenderId: "174269480706",
+  appId: "1:174269480706:web:96cbe14c0680f9f7c34c1b",
+  measurementId: "G-S1XNWLX6EY"
 };
 
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-const ordersRef = ref(db, 'orders');
+const fbApp = initializeApp(firebaseConfig);
+const db = getDatabase(fbApp);
 
-// ── CẤU HÌNH MQTT ────────────────────────────────────────
-const MQTT_HOST    = 'broker.hivemq.com';
-const MQTT_PORT    = 8884;          // WebSocket TLS (wss)
+// Firebase database refs
+const boxesRef = ref(db, 'boxes');        // Trạng thái hộp từ ESP (lần cuối)
+const schedulesRef = ref(db, 'schedules');    // Lịch uống đã gửi
+const doseLogRef = ref(db, 'doseLog');      // Nhật ký đã uống
+const activityLogRef = ref(db, 'activityLog');  // Nhật ký hoạt động
+
+// ── MQTT CONFIG ───────────────────────────────────────────────────────────────
+const MQTT_HOST = 'broker.hivemq.com';
+const MQTT_PORT = 8884;   // WSS
 const MQTT_USE_SSL = true;
-const CLIENT_ID    = 'web_hopThuoc_' + Math.random().toString(36).slice(2, 8);
+const CLIENT_ID = 'web_hopThuoc_' + Math.random().toString(36).slice(2, 8);
 
-// Topic lắng nghe trạng thái hộp từ ESP32
 const TOPICS_STATUS = ['esp/h1', 'esp/h2', 'esp/h3', 'esp/h4'];
-
-// Topic gửi cấu hình xuống ESP32
-// Payload JSON: {"times":2,"slots":["07:00","21:00"]}
 const TOPIC_SCHEDULE = 'esp/schedule';
 
-// ── STATE ────────────────────────────────────────────────
+// ── STATE ─────────────────────────────────────────────────────────────────────
 const state = {
   boxes: [
     { id: 1, label: 'Hộp 1', status: 'unknown', updatedAt: null },
@@ -42,84 +45,184 @@ const state = {
   timeSlots: ['07:00', '21:00'],
   mqttConnected: false,
   sentSchedules: [],
-  selectedDate: new Date().toISOString().slice(0, 10),
-  scheduleDate: new Date().toISOString().slice(0, 10),
+  selectedDate: todayStr(),
+  scheduleDate: todayStr(),
+  todayDoseLog: [],      // doseLog entries for today only
+  allActivityLog: [],      // all activityLog entries from Firebase
+  logFilter: 'all',
+  logSearch: '',
 };
 
 let client = null;
 
-// ── DOM REFS ──────────────────────────────────────────────
-const mqttDot       = document.getElementById('mqttDot');
-const mqttLabel     = document.getElementById('mqttLabel');
-const boxGrid       = document.getElementById('boxGrid');
-const timesVal      = document.getElementById('timesPerDayVal');
-const decreaseBtn   = document.getElementById('decreaseBtn');
-const increaseBtn   = document.getElementById('increaseBtn');
-const timeSlotsEl   = document.getElementById('timeSlots');
-const sendBtn       = document.getElementById('sendScheduleBtn');
-const sendFeedback  = document.getElementById('sendFeedback');
-const logBox        = document.getElementById('logBox');
-const clearLogBtn   = document.getElementById('clearLogBtn');
+// ── DOM REFS ──────────────────────────────────────────────────────────────────
+const mqttDot = document.getElementById('mqttDot');
+const mqttLabel = document.getElementById('mqttLabel');
+const boxGrid = document.getElementById('boxGrid');
+const timesVal = document.getElementById('timesPerDayVal');
+const decreaseBtn = document.getElementById('decreaseBtn');
+const increaseBtn = document.getElementById('increaseBtn');
+const timeSlotsEl = document.getElementById('timeSlots');
+const sendBtn = document.getElementById('sendScheduleBtn');
+const sendFeedback = document.getElementById('sendFeedback');
+const logBox = document.getElementById('logBox');
+const clearLogBtn = document.getElementById('clearLogBtn');
 const sentSchedulesEl = document.getElementById('sentSchedules');
 const scheduleDateEl = document.getElementById('scheduleDate');
+const logTimeline = document.getElementById('logTimeline');
+const logCount = document.getElementById('logCount');
+const logSearchEl = document.getElementById('logSearch');
+const boxesLastUpdate = document.getElementById('boxesLastUpdate');
 
-// ── RENDER BOX GRID ───────────────────────────────────────
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function fmtTime() {
+  const d = new Date();
+  return [d.getHours(), d.getMinutes(), d.getSeconds()]
+    .map(n => String(n).padStart(2, '0')).join(':');
+}
+
+// ── TAB SWITCHING ─────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tabId = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(`tab-${tabId}`).classList.add('active');
+    if (tabId === 'log') renderLogTimeline();
+  });
+});
+
+// ── LOG FILTER & SEARCH ───────────────────────────────────────────────────────
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.logFilter = btn.dataset.filter;
+    renderLogTimeline();
+  });
+});
+
+logSearchEl.addEventListener('input', () => {
+  state.logSearch = logSearchEl.value.toLowerCase().trim();
+  renderLogTimeline();
+});
+
+// ── RENDER BOX GRID ───────────────────────────────────────────────────────────
 function renderBoxes() {
   boxGrid.innerHTML = '';
-  state.boxes.forEach((box, i) => {
+  state.boxes.forEach((box) => {
+    const statusClass = box.status === 'has' ? 'has'
+      : box.status === 'empty' ? 'empty' : 'unknown';
     const card = document.createElement('div');
-    const cls = box.status === 'has' ? 'bg-green-100 border-green-300 text-green-800' : box.status === 'empty' ? 'bg-red-100 border-red-300 text-red-800' : 'bg-gray-100 border-gray-300 text-gray-800';
-    card.className = `p-4 rounded-xl border-2 ${cls} transform hover:scale-105 transition-transform duration-200 shadow-md hover:shadow-lg`;
-    card.setAttribute('data-index', i);
+    card.className = `box-card ${statusClass}`;
+    card.setAttribute('data-box-id', box.id);
 
-    const icon = box.status === 'has' ? '💊' : box.status === 'empty' ? '🫙' : '❓';
-    const status = box.status === 'has' ? 'Còn thuốc' : box.status === 'empty' ? 'Hết thuốc' : 'Chưa có dữ liệu';
-    const updated = box.updatedAt ? `Cập nhật: ${box.updatedAt}` : 'Chưa nhận tín hiệu';
+    const icon = box.status === 'has' ? '💊'
+      : box.status === 'empty' ? '🫙' : '❓';
+    const statusText = box.status === 'has' ? 'Còn thuốc'
+      : box.status === 'empty' ? 'Hết thuốc' : 'Chưa có dữ liệu';
+    const updatedTxt = box.updatedAt ? `Cập nhật: ${box.updatedAt}`
+      : 'Chưa nhận tín hiệu';
+
+    // Đã uống hôm nay?
+    const dosesToday = state.todayDoseLog.filter(d => d.boxId === box.id);
+    let doseBadge;
+    if (dosesToday.length > 0) {
+      const last = dosesToday[dosesToday.length - 1];
+      const src = last.status === 'manual' ? '(thủ công)' : '(tự động)';
+      doseBadge = `<span class="dose-badge taken">✅ Đã uống ${dosesToday.length} lần ${src}</span>`;
+    } else {
+      doseBadge = `<span class="dose-badge pending">⏳ Chưa uống hôm nay</span>`;
+    }
 
     card.innerHTML = `
-      <div class="text-center">
-        <div class="text-3xl mb-2">${icon}</div>
-        <div class="font-semibold text-lg">${box.label}</div>
-        <div class="text-sm">${status}</div>
-        <div class="text-xs mt-1 opacity-75">${updated}</div>
-      </div>
+      <div class="box-label">Hộp ${box.id}</div>
+      <div class="box-icon">${icon}</div>
+      <div class="box-status">${statusText}</div>
+      <div class="box-updated">${updatedTxt}</div>
+      ${doseBadge}
+      <button class="mark-taken-btn" data-box="${box.id}">✋ Đánh dấu đã uống</button>
     `;
+
+    card.querySelector('.mark-taken-btn').addEventListener('click', () => {
+      markTaken(box.id, 'manual');
+    });
+
     boxGrid.appendChild(card);
   });
 }
 
-// ── RENDER TIME SLOTS ─────────────────────────────────────
+function updateBoxCard(idx) {
+  const card = boxGrid.querySelector(`[data-box-id="${state.boxes[idx].id}"]`);
+  if (!card) { renderBoxes(); return; }
+
+  const box = state.boxes[idx];
+  const statusClass = box.status === 'has' ? 'has'
+    : box.status === 'empty' ? 'empty' : 'unknown';
+  card.className = `box-card ${statusClass}`;
+
+  const icon = box.status === 'has' ? '💊'
+    : box.status === 'empty' ? '🫙' : '❓';
+  const statusText = box.status === 'has' ? 'Còn thuốc'
+    : box.status === 'empty' ? 'Hết thuốc' : 'Chưa có dữ liệu';
+
+  card.querySelector('.box-icon').textContent = icon;
+  card.querySelector('.box-status').textContent = statusText;
+  card.querySelector('.box-updated').textContent = `Cập nhật: ${box.updatedAt}`;
+}
+
+// ── MARK TAKEN ────────────────────────────────────────────────────────────────
+function markTaken(boxId, source = 'auto') {
+  const now = new Date();
+  const entry = {
+    boxId,
+    date: todayStr(),
+    takenAt: fmtTime(),
+    timestamp: now.toISOString(),
+    status: source,          // 'auto' | 'manual'
+  };
+
+  push(doseLogRef, entry)
+    .then(() => {
+      addLog(`Hộp ${boxId}: đã uống ✅ (${source === 'manual' ? 'thủ công' : 'tự động'})`, 'ok');
+    })
+    .catch(err => addLog(`Lỗi ghi dose log: ${err.message}`, 'error'));
+}
+
+// ── TIME SLOTS ────────────────────────────────────────────────────────────────
 function renderTimeSlots() {
   timeSlotsEl.innerHTML = '';
   for (let i = 0; i < state.timesPerDay; i++) {
     const val = state.timeSlots[i] || defaultTimeSlot(i, state.timesPerDay);
     const row = document.createElement('div');
-    row.className = 'flex items-center justify-between bg-white p-3 rounded-lg shadow-sm';
+    row.className = 'time-slot-row';
     row.innerHTML = `
-      <span class="text-sm font-medium text-gray-700">Lần ${i + 1}</span>
-      <input class="border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500" type="time" value="${val}" data-slot="${i}" />
+      <span class="time-slot-label">Lần ${i + 1}</span>
+      <input class="field-input" type="time" value="${val}" data-slot="${i}" style="width:120px" />
     `;
     timeSlotsEl.appendChild(row);
   }
-  // Cập nhật state.timeSlots để khớp với số lần
   state.timeSlots = Array.from({ length: state.timesPerDay }, (_, i) =>
     state.timeSlots[i] || defaultTimeSlot(i, state.timesPerDay)
   );
-  // Lắng nghe thay đổi
   timeSlotsEl.querySelectorAll('input[type="time"]').forEach(input => {
     input.addEventListener('change', e => {
       const idx = parseInt(e.target.dataset.slot);
-      if (!Number.isNaN(idx)) {
-        state.timeSlots[idx] = e.target.value;
-      }
+      if (!Number.isNaN(idx)) state.timeSlots[idx] = e.target.value;
     });
   });
 }
 
-function syncCalendarDateToPicker() {
-  if (scheduleDateEl) {
-    scheduleDateEl.value = state.scheduleDate;
-  }
+function defaultTimeSlot(index, total) {
+  if (total === 1) return '08:00';
+  if (total === 2) return index === 0 ? '07:00' : '21:00';
+  const presets = ['07:00', '12:00', '18:00', '21:00', '06:00', '09:00'];
+  return presets[index] ?? `${String(6 + index * 3).padStart(2, '0')}:00`;
 }
 
 function applyDatePicker() {
@@ -133,41 +236,7 @@ function applyDatePicker() {
   });
 }
 
-function defaultTimeSlot(index, total) {
-  // Phân bố đều trong ngày: 08:00, 14:00, 20:00…
-  const presets = ['07:00', '12:00', '18:00', '21:00', '06:00', '09:00'];
-  if (total === 1) return '08:00';
-  if (total === 2) return index === 0 ? '07:00' : '21:00';
-  return presets[index] || `0${6 + index * 3}:00`.slice(-5);
-}
-
-function safeSchedule(schedule) {
-  const slots = Array.isArray(schedule?.slots) ? schedule.slots : [];
-  const timestamp = schedule?.timestamp ? new Date(schedule.timestamp) : new Date(NaN);
-  let dateValue = null;
-  if (typeof schedule?.date === 'string') {
-    const parsedDate = new Date(schedule.date);
-    if (!Number.isNaN(parsedDate.getTime())) {
-      dateValue = parsedDate.toISOString().split('T')[0];
-    }
-  }
-  if (!dateValue && !Number.isNaN(timestamp.getTime())) {
-    dateValue = timestamp.toISOString().split('T')[0];
-  }
-  return {
-    date: dateValue,
-    time: schedule?.time || '',
-    times: typeof schedule?.times === 'number' ? schedule.times : slots.length,
-    slots,
-    timestamp: Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString(),
-  };
-}
-
-function ordinalLabel(n) {
-  return ''; // Tiếng Việt không cần ordinal suffix
-}
-
-// ── STEPPER ───────────────────────────────────────────────
+// ── STEPPER ───────────────────────────────────────────────────────────────────
 function updateTimesPerDay(delta) {
   const next = Math.min(6, Math.max(1, state.timesPerDay + delta));
   if (next === state.timesPerDay) return;
@@ -177,23 +246,20 @@ function updateTimesPerDay(delta) {
   increaseBtn.disabled = next >= 6;
   renderTimeSlots();
 }
-
 decreaseBtn.addEventListener('click', () => updateTimesPerDay(-1));
 increaseBtn.addEventListener('click', () => updateTimesPerDay(+1));
 timesVal.textContent = state.timesPerDay;
 
-// ── GỬI LỊCH XUỐNG ESP32 ─────────────────────────────────
+// ── SEND SCHEDULE ─────────────────────────────────────────────────────────────
 function sendSchedule() {
   if (!state.mqttConnected) {
     addLog('Chưa kết nối MQTT – không thể gửi lịch!', 'error');
     return;
   }
-  // Đọc lại giá trị từ DOM (phòng người dùng chưa tab ra)
+
   timeSlotsEl.querySelectorAll('input[type="time"]').forEach(input => {
     const idx = parseInt(input.dataset.slot);
-    if (!Number.isNaN(idx)) {
-      state.timeSlots[idx] = input.value;
-    }
+    if (!Number.isNaN(idx)) state.timeSlots[idx] = input.value;
   });
 
   const dateValue = scheduleDateEl?.value || state.scheduleDate;
@@ -210,42 +276,29 @@ function sendSchedule() {
   const msg = new Paho.Message(payload);
   msg.destinationName = TOPIC_SCHEDULE;
   msg.retained = true;
+
   try {
     client.send(msg);
     addLog(`Đã gửi lịch → ${TOPIC_SCHEDULE}: ${payload}`, 'ok');
     showFeedback('✓ Đã gửi xuống ESP32');
 
-    // Add to sent schedules
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
     const scheduleData = safeSchedule({
       date: dateValue,
-      time: timeStr,
+      time: fmtTime(),
       times: state.timesPerDay,
       slots: state.timeSlots.slice(0, state.timesPerDay),
-      timestamp: now.toISOString(),
+      timestamp: new Date().toISOString(),
     });
-      state.sentSchedules.unshift(scheduleData);
-      if (state.sentSchedules.length > 30) state.sentSchedules.pop(); // limit history for memory
-      renderSentSchedules();
-      renderCalendar();
-      renderDayDetails();
 
-    // Save to Firebase
-    const newOrderRef = push(ordersRef);
-    set(newOrderRef, scheduleData)
-      .then(() => {
-        addLog('Đã lưu lịch vào Firebase ✓', 'ok');
-      })
-      .catch((error) => {
-        addLog(`Lỗi lưu Firebase: ${error.message}`, 'error');
-      });
+    // Lưu vào Firebase /schedules
+    push(schedulesRef, scheduleData)
+      .then(() => addLog('Đã lưu lịch vào Firebase ✓', 'ok'))
+      .catch(err => addLog(`Lỗi lưu Firebase: ${err.message}`, 'error'));
 
   } catch (e) {
     addLog(`Lỗi gửi MQTT: ${e.message}`, 'error');
   }
 }
-
 sendBtn.addEventListener('click', sendSchedule);
 
 function showFeedback(text) {
@@ -254,94 +307,105 @@ function showFeedback(text) {
   setTimeout(() => sendFeedback.classList.remove('visible'), 3000);
 }
 
-// ── RENDER SENT SCHEDULES ─────────────────────────────────
+// ── SAFE SCHEDULE ─────────────────────────────────────────────────────────────
+function safeSchedule(schedule) {
+  const slots = Array.isArray(schedule?.slots) ? schedule.slots : [];
+  const timestamp = schedule?.timestamp ? new Date(schedule.timestamp) : new Date(NaN);
+  let dateValue = null;
+
+  if (typeof schedule?.date === 'string') {
+    const p = new Date(schedule.date);
+    if (!Number.isNaN(p.getTime())) dateValue = p.toISOString().split('T')[0];
+  }
+  if (!dateValue && !Number.isNaN(timestamp.getTime())) {
+    dateValue = timestamp.toISOString().split('T')[0];
+  }
+
+  return {
+    date: dateValue,
+    time: schedule?.time || '',
+    times: typeof schedule?.times === 'number' ? schedule.times : slots.length,
+    slots,
+    timestamp: Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString(),
+  };
+}
+
+// ── RENDER SENT SCHEDULES ─────────────────────────────────────────────────────
 function renderSentSchedules() {
   sentSchedulesEl.innerHTML = '';
   if (state.sentSchedules.length === 0) {
-    sentSchedulesEl.innerHTML = '<p class="text-gray-500 italic">Chưa có lịch nào được gửi...</p>';
+    sentSchedulesEl.innerHTML = '<p class="no-schedules">Chưa có lịch nào được gửi...</p>';
     return;
   }
-  const recent = state.sentSchedules.slice(0, 5);
-  recent.forEach((schedule) => {
+  state.sentSchedules.slice(0, 8).forEach(schedule => {
     const slots = Array.isArray(schedule.slots) ? schedule.slots : [];
-    const dateLabel = schedule.date || (schedule.timestamp ? schedule.timestamp.split('T')[0] : '---');
+    const dateLabel = schedule.date
+      || (schedule.timestamp ? schedule.timestamp.split('T')[0] : '---');
     const div = document.createElement('div');
-    div.className = 'bg-white p-4 rounded-lg shadow-sm hover:shadow-md transition-shadow';
+    div.className = 'sent-schedule-item';
     div.innerHTML = `
-      <div class="text-sm text-blue-600 font-semibold">Ngày: ${dateLabel}</div>
-      <div class="text-sm text-gray-600">Gửi lúc: ${schedule.time || '---'}</div>
-      <div class="text-gray-800">${schedule.times || slots.length} lần/ngày: ${slots.join(', ')}</div>
+      <div class="sent-schedule-icon">📅</div>
+      <div>
+        <div class="sent-time">${dateLabel} &nbsp;&middot;&nbsp; Gửi lúc ${schedule.time || '---'}</div>
+        <div class="sent-details">${schedule.times || slots.length} lần/ngày &nbsp;&middot;&nbsp; ${slots.join('  ·  ')}</div>
+      </div>
     `;
     sentSchedulesEl.appendChild(div);
   });
 }
 
-// ── RENDER CALENDAR ───────────────────────────────────────
+// ── CALENDAR ─────────────────────────────────────────────────────────────────
 function renderCalendar() {
   const calendarEl = document.getElementById('calendar');
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
+  const monthNames = ['Tháng 1', 'Tháng 2', 'Tháng 3', 'Tháng 4', 'Tháng 5', 'Tháng 6',
+    'Tháng 7', 'Tháng 8', 'Tháng 9', 'Tháng 10', 'Tháng 11', 'Tháng 12'];
 
-  // Tạo header tháng
-  const monthNames = ['Tháng 1', 'Tháng 2', 'Tháng 3', 'Tháng 4', 'Tháng 5', 'Tháng 6', 'Tháng 7', 'Tháng 8', 'Tháng 9', 'Tháng 10', 'Tháng 11', 'Tháng 12'];
-  const header = document.createElement('div');
-  header.className = 'text-center mb-4';
-  header.innerHTML = `<h3 class="text-lg font-semibold text-gray-800">${monthNames[month]} ${year}</h3>`;
-  calendarEl.innerHTML = '';
-  calendarEl.appendChild(header);
+  calendarEl.innerHTML = `<div class="cal-header"><h3>${monthNames[month]} ${year}</h3></div>`;
 
-  // Tạo grid ngày
   const grid = document.createElement('div');
-  grid.className = 'grid grid-cols-7 gap-1';
+  grid.className = 'cal-grid';
 
-  // Header ngày trong tuần
-  const daysOfWeek = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
-  daysOfWeek.forEach(day => {
-    const dayEl = document.createElement('div');
-    dayEl.className = 'text-center font-medium text-gray-600 py-2';
-    dayEl.textContent = day;
-    grid.appendChild(dayEl);
+  ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'].forEach(d => {
+    const el = document.createElement('div');
+    el.className = 'cal-dow';
+    el.textContent = d;
+    grid.appendChild(el);
   });
 
-  // Tìm ngày đầu tháng
-  const firstDay = new Date(year, month, 1);
-  const startDay = firstDay.getDay(); // 0 = CN
-
-  // Thêm ô trống cho ngày trước
-  for (let i = 0; i < startDay; i++) {
-    const emptyEl = document.createElement('div');
-    emptyEl.className = 'py-2';
-    grid.appendChild(emptyEl);
+  const firstDay = new Date(year, month, 1).getDay();
+  for (let i = 0; i < firstDay; i++) {
+    const e = document.createElement('div');
+    e.className = 'cal-day cal-day--empty';
+    grid.appendChild(e);
   }
 
-  // Thêm ngày trong tháng
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const daysWithSchedules = getDaysWithSchedules();
+  const daysWithSch = getDaysWithSchedules();
+  const todayDate = todayStr();
 
   for (let day = 1; day <= daysInMonth; day++) {
-    const dayEl = document.createElement('div');
     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const hasSchedule = daysWithSchedules.includes(dateStr);
+    const hasSch = daysWithSch.includes(dateStr);
+    const isToday = dateStr === todayDate;
+    const isSelected = dateStr === state.selectedDate;
 
-    dayEl.className = `text-center py-2 rounded-lg cursor-pointer transition-all duration-200 ${
-      dateStr === state.selectedDate ? 'bg-green-500 text-white shadow-lg' :
-      hasSchedule ? 'bg-blue-500 text-white shadow-md hover:bg-blue-600' : 'hover:bg-gray-200'
-    }`;
-    dayEl.innerHTML = `
-      <div class="text-base font-semibold">${day}</div>
-      ${hasSchedule ? '<span class="block mx-auto mt-1 h-1 w-1 rounded-full bg-red-500"></span>' : ''}
-    `;
-    if (hasSchedule) {
-      dayEl.title = 'Có lịch uống thuốc';
-    }
-    dayEl.addEventListener('click', () => {
+    const d = document.createElement('div');
+    d.className = `cal-day${isSelected ? ' cal-day--selected'
+      : isToday ? ' cal-day--today'
+        : hasSch ? ' cal-day--has' : ''}`;
+    d.innerHTML = `<span>${day}</span>${hasSch ? '<span class="cal-dot"></span>' : ''}`;
+    d.title = hasSch ? 'Có lịch uống thuốc' : '';
+    d.addEventListener('click', () => {
       state.selectedDate = dateStr;
       state.scheduleDate = dateStr;
       if (scheduleDateEl) scheduleDateEl.value = dateStr;
+      renderCalendar();
       renderDayDetails();
     });
-    grid.appendChild(dayEl);
+    grid.appendChild(d);
   }
 
   calendarEl.appendChild(grid);
@@ -349,138 +413,268 @@ function renderCalendar() {
 
 function getDaysWithSchedules() {
   const days = new Set();
-  state.sentSchedules.forEach(schedule => {
-    const dateValue = schedule.date ? schedule.date : (schedule.timestamp ? new Date(schedule.timestamp).toISOString().split('T')[0] : null);
-    if (dateValue) {
-      days.add(dateValue);
-    }
+  state.sentSchedules.forEach(s => {
+    const d = s.date || (s.timestamp ? new Date(s.timestamp).toISOString().split('T')[0] : null);
+    if (d) days.add(d);
   });
   return Array.from(days);
 }
 
 function getLatestScheduleForDate(date) {
-  const schedulesForDay = state.sentSchedules
-    .filter(schedule => {
-      const dateValue = schedule.date ? schedule.date : (schedule.timestamp ? new Date(schedule.timestamp).toISOString().split('T')[0] : null);
-      return dateValue === date;
+  return state.sentSchedules
+    .filter(s => {
+      const d = s.date || (s.timestamp ? new Date(s.timestamp).toISOString().split('T')[0] : null);
+      return d === date;
     })
     .sort((a, b) => {
       const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return tb - ta;
-    });
-  return schedulesForDay.length ? schedulesForDay[0] : null;
+    })[0] || null;
 }
 
-// ── RENDER DAY DETAILS ────────────────────────────────────
 function renderDayDetails() {
   const detailsEl = document.getElementById('dayDetails');
   if (!state.selectedDate) {
-    detailsEl.innerHTML = '<p class="text-gray-600">Chọn một ngày để xem chi tiết lịch uống thuốc.</p>';
+    detailsEl.innerHTML = '<p class="text-hint">Chọn một ngày để xem chi tiết lịch uống thuốc.</p>';
     return;
   }
-
   const schedule = getLatestScheduleForDate(state.selectedDate);
   if (!schedule) {
-    detailsEl.innerHTML = `<p class="text-gray-600">Ngày ${state.selectedDate} không có lịch uống thuốc.</p>`;
+    detailsEl.innerHTML = `<p class="text-hint">Ngày ${state.selectedDate} không có lịch uống thuốc.</p>`;
     return;
   }
-
-  const dateObj = new Date(state.selectedDate);
+  // Fix timezone offset when parsing date-only string
+  const dateObj = new Date(state.selectedDate + 'T00:00:00');
   const dayNames = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
-  const formattedDate = `${dayNames[dateObj.getDay()]}, ${dateObj.getDate()}/${dateObj.getMonth() + 1}/${dateObj.getFullYear()}`;
+  const fmtDate = `${dayNames[dateObj.getDay()]}, ${dateObj.getDate()}/${dateObj.getMonth() + 1}/${dateObj.getFullYear()}`;
   const slots = Array.isArray(schedule.slots) ? schedule.slots : [];
 
-  const html = `
-    <h4 class="text-lg font-semibold text-gray-800 mb-2">Lịch uống thuốc ngày ${formattedDate}</h4>
-    <div class="bg-white p-3 rounded-lg shadow-sm">
-      <div class="text-sm text-gray-600">Gửi lúc: ${schedule.time || '---'}</div>
-      <div class="text-gray-800 font-medium">${schedule.times || slots.length} lần/ngày</div>
-      <div class="text-blue-600">Thời gian: ${slots.join(', ')}</div>
+  detailsEl.innerHTML = `
+    <div class="day-detail-card">
+      <div class="day-detail-date">${fmtDate}</div>
+      <div class="day-detail-info">
+        <span>Gửi lúc: ${schedule.time || '---'}</span>
+        <span class="day-detail-times">${schedule.times || slots.length} lần/ngày</span>
+      </div>
+      <div class="day-detail-slots">
+        ${slots.map(s => `<span class="slot-chip">🕐 ${s}</span>`).join('')}
+      </div>
     </div>
   `;
-
-  detailsEl.innerHTML = html;
 }
 
-// ── LOAD SENT SCHEDULES FROM FIREBASE ─────────────────────
-function loadSentSchedulesFromFirebase() {
-  get(ordersRef)
-    .then((snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        const schedules = Object.values(data)
-          .map(safeSchedule)
-          .filter(schedule => schedule.timestamp !== null)
-          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        state.sentSchedules = schedules;
-        renderSentSchedules();
-        renderCalendar();
-        renderDayDetails();
-        addLog('Đã tải lịch từ Firebase ✓', 'ok');
-      } else {
-        renderCalendar();
-        renderDayDetails();
-        addLog('Không có lịch nào trong Firebase', 'warn');
-      }
-    })
-    .catch((error) => {
-      addLog(`Lỗi tải Firebase: ${error.message}`, 'error');
-    });
-}
-
-// ── LOG ───────────────────────────────────────────────────
+// ── MINI LOG ─────────────────────────────────────────────────────────────────
 function addLog(msg, type = '') {
   // Xóa placeholder nếu còn
-  const ph = logBox.querySelector('p');
-  if (ph && ph.classList.contains('italic')) ph.remove();
+  const ph = logBox.querySelector('.log-placeholder');
+  if (ph) ph.remove();
 
-  const now = new Date();
-  const t   = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
-
+  const t = fmtTime();
   const entry = document.createElement('div');
-  entry.className = 'flex space-x-2 text-sm py-1';
-  let colorClass = '';
-  if (type === 'ok') colorClass = 'text-green-600';
-  else if (type === 'error') colorClass = 'text-red-600';
-  else if (type === 'warn') colorClass = 'text-yellow-600';
-  entry.innerHTML = `<span class="text-gray-500">${t}</span><span class="${colorClass}">${msg}</span>`;
+  entry.className = 'log-entry';
+  const colorClass = type === 'ok' ? 'ok' : type === 'error' ? 'error' : type === 'warn' ? 'warn' : '';
+  entry.innerHTML = `<span class="log-time">${t}</span><span class="log-msg ${colorClass}">${msg}</span>`;
   logBox.appendChild(entry);
   logBox.scrollTop = logBox.scrollHeight;
+
+  // Lưu vào Firebase activityLog (không await – fire & forget)
+  push(activityLogRef, {
+    message: msg,
+    type: type,
+    timestamp: new Date().toISOString(),
+  }).catch(() => { }); // silent fail để tránh vòng lặp
 }
 
 clearLogBtn.addEventListener('click', () => {
   logBox.innerHTML = '<p class="log-placeholder">Chưa có sự kiện nào...</p>';
 });
 
-// ── MQTT ─────────────────────────────────────────────────
+// ── RENDER LOG TIMELINE ───────────────────────────────────────────────────────
+function renderLogTimeline() {
+  if (!logTimeline) return;
+
+  let entries = [...state.allActivityLog];
+
+  if (state.logFilter !== 'all') {
+    entries = entries.filter(e => e.type === state.logFilter);
+  }
+  if (state.logSearch) {
+    entries = entries.filter(e =>
+      (e.message || '').toLowerCase().includes(state.logSearch)
+    );
+  }
+
+  if (logCount) logCount.textContent = `${entries.length} mục`;
+
+  if (entries.length === 0) {
+    logTimeline.innerHTML = '<p class="log-placeholder">Không tìm thấy mục nào phù hợp.</p>';
+    return;
+  }
+
+  // Nhóm theo ngày
+  const groups = {};
+  entries.forEach(e => {
+    const date = e.timestamp ? e.timestamp.slice(0, 10) : 'unknown';
+    if (!groups[date]) groups[date] = [];
+    groups[date].push(e);
+  });
+
+  logTimeline.innerHTML = '';
+
+  const dayNames = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+  const today = todayStr();
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+  Object.keys(groups)
+    .sort((a, b) => b.localeCompare(a))
+    .forEach(date => {
+      const group = document.createElement('div');
+      group.className = 'timeline-group';
+
+      const lbl = document.createElement('div');
+      lbl.className = 'timeline-date-label';
+      if (date === today) {
+        lbl.textContent = 'Hôm nay';
+      } else if (date === yesterday) {
+        lbl.textContent = 'Hôm qua';
+      } else if (date !== 'unknown') {
+        const d = new Date(date + 'T00:00:00');
+        lbl.textContent = `${dayNames[d.getDay()]} – ${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+      } else {
+        lbl.textContent = 'Không xác định';
+      }
+      group.appendChild(lbl);
+
+      const typeIcon = { ok: '✅', warn: '⚠️', error: '❌', '': 'ℹ️' };
+
+      groups[date]
+        .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
+        .forEach(e => {
+          const row = document.createElement('div');
+          row.className = 'timeline-entry';
+          const timeStr = e.timestamp
+            ? new Date(e.timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+            : '--:--:--';
+          const icon = typeIcon[e.type] ?? 'ℹ️';
+          const msgClass = e.type || '';
+          row.innerHTML = `
+            <span class="timeline-time">${timeStr}</span>
+            <span class="timeline-icon ${e.type || 'info'}">${icon}</span>
+            <span class="timeline-msg ${msgClass}">${e.message || ''}</span>
+          `;
+          group.appendChild(row);
+        });
+
+      logTimeline.appendChild(group);
+    });
+}
+
+// ── FIREBASE REAL-TIME LISTENERS ──────────────────────────────────────────────
+
+/** Lắng nghe trạng thái hộp từ Firebase (cập nhật khi ESP ghi qua MQTT) */
+function setupBoxListener() {
+  onValue(boxesRef, snapshot => {
+    if (!snapshot.exists()) return;
+    const data = snapshot.val();
+    ['box1', 'box2', 'box3', 'box4'].forEach((key, i) => {
+      if (data[key]) {
+        state.boxes[i].status = data[key].status || 'unknown';
+        state.boxes[i].updatedAt = data[key].updatedAt
+          ? new Date(data[key].updatedAt).toLocaleTimeString('vi-VN')
+          : null;
+      }
+    });
+    renderBoxes();
+    if (boxesLastUpdate) {
+      boxesLastUpdate.textContent = `Đồng bộ lúc ${fmtTime()}`;
+    }
+  });
+}
+
+/** Lắng nghe lịch đã gửi từ Firebase */
+function setupScheduleListener() {
+  onValue(schedulesRef, snapshot => {
+    if (!snapshot.exists()) {
+      state.sentSchedules = [];
+      renderSentSchedules();
+      renderCalendar();
+      renderDayDetails();
+      return;
+    }
+    const data = snapshot.val();
+    state.sentSchedules = Object.values(data)
+      .map(safeSchedule)
+      .filter(s => s.timestamp !== null)
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    renderSentSchedules();
+    renderCalendar();
+    renderDayDetails();
+  });
+}
+
+/** Lắng nghe dose log từ Firebase – chỉ lấy hôm nay để hiển thị badge */
+function setupDoseLogListener() {
+  onValue(doseLogRef, snapshot => {
+    const today = todayStr();
+    if (!snapshot.exists()) {
+      state.todayDoseLog = [];
+      renderBoxes();
+      return;
+    }
+    const data = snapshot.val();
+    state.todayDoseLog = Object.values(data).filter(d => d.date === today);
+    renderBoxes();
+  });
+}
+
+/** Lắng nghe toàn bộ activity log từ Firebase */
+function setupActivityLogListener() {
+  onValue(activityLogRef, snapshot => {
+    if (!snapshot.exists()) {
+      state.allActivityLog = [];
+    } else {
+      const data = snapshot.val();
+      state.allActivityLog = Object.values(data)
+        .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+      // Chỉ giữ 500 mục gần nhất trong bộ nhớ
+      if (state.allActivityLog.length > 500) {
+        state.allActivityLog = state.allActivityLog.slice(0, 500);
+      }
+    }
+    if (logCount) logCount.textContent = `${state.allActivityLog.length} mục`;
+    // Nếu tab Log đang mở thì render lại
+    const logTab = document.getElementById('tab-log');
+    if (logTab && logTab.classList.contains('active')) {
+      renderLogTimeline();
+    }
+  });
+}
+
+// ── MQTT ─────────────────────────────────────────────────────────────────────
 function setMqttStatus(connected, label) {
   state.mqttConnected = connected;
-  const dot = document.getElementById('mqttDot');
-  const lbl = document.getElementById('mqttLabel');
   if (connected) {
-    dot.className = 'w-4 h-4 bg-green-500 rounded-full shadow-md animate-pulse';
-    lbl.className = 'text-sm font-medium text-green-600';
+    mqttDot.className = 'dot dot--ok';
+    mqttLabel.style.color = 'var(--green-600)';
   } else {
-    dot.className = 'w-4 h-4 bg-red-500 rounded-full shadow-md';
-    lbl.className = 'text-sm font-medium text-red-600';
+    mqttDot.className = 'dot dot--error';
+    mqttLabel.style.color = 'var(--red-600)';
   }
-  lbl.textContent = label;
+  mqttLabel.textContent = label;
 }
 
 function initMqtt() {
   client = new Paho.Client(MQTT_HOST, MQTT_PORT, CLIENT_ID);
 
-  client.onConnectionLost = (resp) => {
+  client.onConnectionLost = resp => {
     setMqttStatus(false, 'Mất kết nối');
     addLog(`MQTT mất kết nối: ${resp.errorMessage}`, 'error');
     setTimeout(connectMqtt, 5000);
   };
 
-  client.onMessageArrived = (msg) => {
-    const topic   = msg.destinationName;
-    const payload = msg.payloadString.trim();
-    handleMqttMessage(topic, payload);
+  client.onMessageArrived = msg => {
+    handleMqttMessage(msg.destinationName, msg.payloadString.trim());
   };
 
   connectMqtt();
@@ -489,6 +683,7 @@ function initMqtt() {
 function connectMqtt() {
   mqttDot.className = 'dot dot--off';
   mqttLabel.textContent = 'Đang kết nối...';
+  mqttLabel.style.color = '';
   addLog(`Kết nối tới ${MQTT_HOST}:${MQTT_PORT} (WSS)...`);
 
   client.connect({
@@ -503,13 +698,10 @@ function connectMqtt() {
 function onConnect() {
   setMqttStatus(true, 'Đã kết nối');
   addLog('MQTT kết nối thành công ✓', 'ok');
-
-  TOPICS_STATUS.forEach((topic, i) => {
+  TOPICS_STATUS.forEach(topic => {
     client.subscribe(topic);
     addLog(`Đăng ký topic: ${topic}`);
   });
-
-  // Cũng lắng nghe phản hồi lịch từ ESP (nếu có)
   client.subscribe('esp/schedule/ack');
 }
 
@@ -520,29 +712,39 @@ function onConnectFail(resp) {
 }
 
 function handleMqttMessage(topic, payload) {
-  // Trạng thái hộp thuốc: esp/h1 .. esp/h4
+  // ── Trạng thái hộp: esp/h1 .. esp/h4 ──
   const boxIdx = TOPICS_STATUS.indexOf(topic);
   if (boxIdx !== -1) {
     const hasmed = payload === '1';
-    const box    = state.boxes[boxIdx];
-    const prev   = box.status;
-    box.status    = hasmed ? 'has' : 'empty';
+    const box = state.boxes[boxIdx];
+    const prevStatus = box.status;
+    box.status = hasmed ? 'has' : 'empty';
     box.updatedAt = fmtTime();
 
-    // Cập nhật card cụ thể (không render lại toàn bộ)
+    // Lưu trạng thái lên Firebase /boxes/boxN
+    const boxKey = `box${box.id}`;
+    set(ref(db, `boxes/${boxKey}`), {
+      status: box.status,
+      updatedAt: new Date().toISOString(),
+    }).catch(err => console.warn('Firebase box update error:', err));
+
+    // Cập nhật card ngay lập tức
     updateBoxCard(boxIdx);
 
-    if (prev !== box.status) {
-      const label = box.label;
-      const msg   = hasmed
-        ? `${label}: còn thuốc ✓`
-        : `${label}: hết thuốc ⚠`;
-      addLog(msg, hasmed ? 'ok' : 'warn');
+    // Phát hiện has → empty = đã lấy thuốc ra (tự động)
+    if (prevStatus === 'has' && box.status === 'empty') {
+      addLog(`${box.label}: đã lấy thuốc ra ⚠`, 'warn');
+      markTaken(box.id, 'auto');
+    } else if (prevStatus !== box.status) {
+      const logMsg = hasmed
+        ? `${box.label}: còn thuốc ✓`
+        : `${box.label}: hết thuốc ⚠`;
+      addLog(logMsg, hasmed ? 'ok' : 'warn');
     }
     return;
   }
 
-  // ACK từ ESP32 sau khi nhận lịch
+  // ── ACK từ ESP32 ──
   if (topic === 'esp/schedule/ack') {
     addLog(`ESP32 xác nhận lịch: ${payload}`, 'ok');
     return;
@@ -551,40 +753,146 @@ function handleMqttMessage(topic, payload) {
   addLog(`[${topic}] ${payload}`);
 }
 
-function updateBoxCard(idx) {
-  const cards = boxGrid.querySelectorAll('.box-card');
-  if (!cards[idx]) {
-    renderBoxes();
-    return;
-  }
-  const box  = state.boxes[idx];
-  const card = cards[idx];
-  const cls  = box.status === 'has' ? 'has'
-             : box.status === 'empty' ? 'empty' : 'unknown';
-  card.className = `box-card ${cls}`;
-
-  const icon   = box.status === 'has' ? '💊'
-               : box.status === 'empty' ? '🫙' : '❓';
-  const status = box.status === 'has' ? 'Còn thuốc'
-               : box.status === 'empty' ? 'Hết thuốc' : 'Chưa có dữ liệu';
-  const updated = `Cập nhật: ${box.updatedAt}`;
-
-  card.querySelector('.box-icon').textContent   = icon;
-  card.querySelector('.box-status').textContent = status;
-  card.querySelector('.box-updated').textContent = updated;
-}
-
-function fmtTime() {
-  const d = new Date();
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
-}
-
-// ── INIT ──────────────────────────────────────────────────
+// ── INIT ──────────────────────────────────────────────────────────────────────
 renderBoxes();
 renderTimeSlots();
 applyDatePicker();
 renderSentSchedules();
 renderCalendar();
 renderDayDetails();
-loadSentSchedulesFromFirebase();
+
+// Thiết lập real-time listeners Firebase
+setupBoxListener();
+setupScheduleListener();
+setupDoseLogListener();
+setupActivityLogListener();
+
+// Kết nối MQTT
 initMqtt();
+
+// ── MOUSE EFFECTS ─────────────────────────────────────────────────────────────
+// Chỉ kích hoạt trên thiết bị có chuột thật
+if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+  (function initMouseEffects() {
+    const dot = document.getElementById('cursorDot');
+    const glow = document.getElementById('cursorGlow');
+    if (!dot || !glow) return;
+
+    let mx = -300, my = -300;   // vị trí chuột thực
+    let gx = -300, gy = -300;   // vị trí glow (lag)
+    let rafId;
+
+    // ── Dot theo ngay lập tức ──────────────────────────────
+    document.addEventListener('mousemove', e => {
+      mx = e.clientX;
+      my = e.clientY;
+
+      // Dot snap ngay
+      dot.style.left = mx + 'px';
+      dot.style.top = my + 'px';
+
+      // CSS var cho spotlight nền
+      document.documentElement.style.setProperty('--cursor-x', mx + 'px');
+      document.documentElement.style.setProperty('--cursor-y', my + 'px');
+    });
+
+    // ── Glow lag (easing) ──────────────────────────────────
+    function animateGlow() {
+      gx += (mx - gx) * 0.065;
+      gy += (my - gy) * 0.065;
+      glow.style.left = gx + 'px';
+      glow.style.top = gy + 'px';
+      rafId = requestAnimationFrame(animateGlow);
+    }
+    animateGlow();
+
+    // ── Expand dot trên phần tử tương tác ─────────────────
+    const INTERACTIVE = 'button, a, input, select, label, ' +
+      '.box-card, .cal-day, .filter-btn, .tab-btn, ' +
+      '.sent-schedule-item, .mark-taken-btn, .ghost-btn, .btn--glow';
+
+    document.addEventListener('mouseover', e => {
+      if (e.target.closest(INTERACTIVE)) {
+        dot.classList.add('expanded');
+      } else {
+        dot.classList.remove('expanded');
+      }
+    });
+
+    // ── Thu nhỏ khi nhấn ──────────────────────────────────
+    document.addEventListener('mousedown', () => dot.classList.add('clicking'));
+    document.addEventListener('mouseup', () => dot.classList.remove('clicking'));
+
+    // ── Ẩn/hiện khi chuột vào/ra cửa sổ ──────────────────
+    document.addEventListener('mouseleave', () => {
+      dot.style.opacity = '0';
+      glow.style.opacity = '0';
+    });
+    document.addEventListener('mouseenter', () => {
+      dot.style.opacity = '1';
+      glow.style.opacity = '1';
+    });
+
+    // ── Click ripple ───────────────────────────────────────
+    document.addEventListener('click', e => {
+      const r = document.createElement('div');
+      r.className = 'click-ripple';
+      r.style.left = e.clientX + 'px';
+      r.style.top = e.clientY + 'px';
+      document.body.appendChild(r);
+      setTimeout(() => r.remove(), 600);
+    });
+
+    // ── 3D Tilt + Shimmer trên các card ───────────────────
+    function bindCardEffects() {
+      // Box cards – tilt 3D + shimmer
+      document.querySelectorAll('.box-card').forEach(card => {
+        if (card._tiltBound) return;
+        card._tiltBound = true;
+
+        card.addEventListener('mousemove', e => {
+          const r = card.getBoundingClientRect();
+          const xr = (e.clientX - r.left) / r.width - 0.5;  // -0.5 → 0.5
+          const yr = (e.clientY - r.top) / r.height - 0.5;
+          card.style.transform =
+            `perspective(700px) rotateY(${xr * 14}deg) rotateX(${-yr * 14}deg) ` +
+            `translateY(-5px) scale(1.025)`;
+          // Shimmer theo con trỏ
+          card.style.setProperty('--cx', ((e.clientX - r.left) / r.width * 100) + '%');
+          card.style.setProperty('--cy', ((e.clientY - r.top) / r.height * 100) + '%');
+        });
+
+        card.addEventListener('mouseleave', () => {
+          card.style.transform = '';
+          // Reset shimmer position ra ngoài card
+          card.style.setProperty('--cx', '-50%');
+          card.style.setProperty('--cy', '-50%');
+        });
+      });
+
+      // Glass cards – chỉ shimmer (không tilt vì có form inputs bên trong)
+      document.querySelectorAll('.glass-card').forEach(card => {
+        if (card._shimmerBound) return;
+        card._shimmerBound = true;
+
+        card.addEventListener('mousemove', e => {
+          const r = card.getBoundingClientRect();
+          card.style.setProperty('--cx', ((e.clientX - r.left) / r.width * 100) + '%');
+          card.style.setProperty('--cy', ((e.clientY - r.top) / r.height * 100) + '%');
+        });
+
+        card.addEventListener('mouseleave', () => {
+          card.style.setProperty('--cx', '-50%');
+          card.style.setProperty('--cy', '-50%');
+        });
+      });
+    }
+
+    // Bind ngay và mỗi khi boxGrid thay đổi (Firebase re-render)
+    bindCardEffects();
+    const observer = new MutationObserver(() => setTimeout(bindCardEffects, 50));
+    const grid = document.getElementById('boxGrid');
+    if (grid) observer.observe(grid, { childList: true, subtree: false });
+
+  })();
+}
