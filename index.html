@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="vi">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,14 +8,16 @@
   <title>MedBox – Smart Medicine Manager</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
 </head>
+
 <body>
 
   <!-- Custom cursor -->
-  <div class="cursor-dot"  id="cursorDot"></div>
+  <div class="cursor-dot" id="cursorDot"></div>
   <div class="cursor-glow" id="cursorGlow"></div>
 
   <!-- Background ambient orbs -->
@@ -30,9 +33,10 @@
 
       <div class="header-brand">
         <div class="brand-logo">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/>
-            <path d="m8.5 8.5 7 7"/>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z" />
+            <path d="m8.5 8.5 7 7" />
           </svg>
         </div>
         <div class="brand-text">
@@ -51,11 +55,23 @@
     <nav class="tab-nav">
       <div class="tab-nav-inner">
         <button class="tab-btn active" data-tab="dashboard" id="tab-btn-dashboard">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <rect width="7" height="9" x="3" y="3" rx="1" />
+            <rect width="7" height="5" x="14" y="3" rx="1" />
+            <rect width="7" height="9" x="14" y="12" rx="1" />
+            <rect width="7" height="5" x="3" y="16" rx="1" />
+          </svg>
           Tổng quan
         </button>
         <button class="tab-btn" data-tab="log" id="tab-btn-log">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+          </svg>
           Nhật ký
         </button>
       </div>
@@ -114,7 +130,11 @@
 
               <div class="config-actions">
                 <button class="btn btn--glow" id="sendScheduleBtn">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13" />
+                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                  </svg>
                   Gửi xuống ESP32
                 </button>
                 <span class="send-feedback" id="sendFeedback">✓ Đã gửi</span>
@@ -158,7 +178,12 @@
               <h2 class="section-title">Nhật ký phiên</h2>
             </div>
             <button class="ghost-btn" id="clearLogBtn">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/></svg>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14H6L5 6" />
+                <path d="M10 11v6M14 11v6M9 6V4h6v2" />
+              </svg>
               Xóa
             </button>
           </div>
@@ -185,13 +210,17 @@
 
           <div class="log-filter-bar">
             <div class="filter-group">
-              <button class="filter-btn active" data-filter="all"   id="filter-all">Tất cả</button>
-              <button class="filter-btn"         data-filter="ok"   id="filter-ok">✅ Thành công</button>
-              <button class="filter-btn"         data-filter="warn" id="filter-warn">⚠️ Cảnh báo</button>
-              <button class="filter-btn"         data-filter="error" id="filter-error">❌ Lỗi</button>
+              <button class="filter-btn active" data-filter="all" id="filter-all">Tất cả</button>
+              <button class="filter-btn" data-filter="ok" id="filter-ok">✅ Thành công</button>
+              <button class="filter-btn" data-filter="warn" id="filter-warn">⚠️ Cảnh báo</button>
+              <button class="filter-btn" data-filter="error" id="filter-error">❌ Lỗi</button>
             </div>
             <div class="search-wrap">
-              <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
               <input type="text" class="log-search" id="logSearch" placeholder="Tìm kiếm..." />
             </div>
           </div>
@@ -208,4 +237,5 @@
 
   <script type="module" src="app.js"></script>
 </body>
+
 </html>
