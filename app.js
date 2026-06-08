@@ -33,6 +33,8 @@ const CLIENT_ID = 'web_hopThuoc_' + Math.random().toString(36).slice(2, 8);
 const TOPICS_STATUS = ['esp/h1', 'esp/h2', 'esp/h3', 'esp/h4'];
 const TOPIC_SCHEDULE = 'esp/schedule';
 
+const DOSE_WINDOW_MIN = 30;
+
 // ── STATE ─────────────────────────────────────────────────────────────────────
 const state = {
   boxes: [
@@ -85,6 +87,22 @@ function fmtTime() {
     .map(n => String(n).padStart(2, '0')).join(':');
 }
 
+function getBoxAssignedSlot(boxId) {
+  const slots = state.timeSlots.slice(0, state.timesPerDay);
+  if (slots.length === 0) return null;
+  const slotIndex = (boxId - 1) % slots.length;
+  return { slotIndex, time: slots[slotIndex], laneNum: slotIndex + 1 };
+}
+
+function isNearScheduledTime(slotTime) {
+  if (!slotTime) return false;
+  const [h, m] = slotTime.split(':').map(Number);
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const slotMin = h * 60 + m;
+  return Math.abs(nowMin - slotMin) <= DOSE_WINDOW_MIN;
+}
+
 // ── TAB SWITCHING ─────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -129,29 +147,12 @@ function renderBoxes() {
     const updatedTxt = box.updatedAt ? `Cập nhật: ${box.updatedAt}`
       : 'Chưa nhận tín hiệu';
 
-    // Đã uống hôm nay?
-    const dosesToday = state.todayDoseLog.filter(d => d.boxId === box.id);
-    let doseBadge;
-    if (dosesToday.length > 0) {
-      const last = dosesToday[dosesToday.length - 1];
-      const src = last.status === 'manual' ? '(thủ công)' : '(tự động)';
-      doseBadge = `<span class="dose-badge taken">✅ Đã uống ${dosesToday.length} lần ${src}</span>`;
-    } else {
-      doseBadge = `<span class="dose-badge pending">⏳ Chưa uống hôm nay</span>`;
-    }
-
     card.innerHTML = `
       <div class="box-label">Hộp ${box.id}</div>
       <div class="box-icon">${icon}</div>
       <div class="box-status">${statusText}</div>
       <div class="box-updated">${updatedTxt}</div>
-      ${doseBadge}
-      <button class="mark-taken-btn" data-box="${box.id}">✋ Đánh dấu đã uống</button>
     `;
-
-    card.querySelector('.mark-taken-btn').addEventListener('click', () => {
-      markTaken(box.id, 'manual');
-    });
 
     boxGrid.appendChild(card);
   });
@@ -613,20 +614,7 @@ function setupScheduleListener() {
   });
 }
 
-/** Lắng nghe dose log từ Firebase – chỉ lấy hôm nay để hiển thị badge */
-function setupDoseLogListener() {
-  onValue(doseLogRef, snapshot => {
-    const today = todayStr();
-    if (!snapshot.exists()) {
-      state.todayDoseLog = [];
-      renderBoxes();
-      return;
-    }
-    const data = snapshot.val();
-    state.todayDoseLog = Object.values(data).filter(d => d.date === today);
-    renderBoxes();
-  });
-}
+
 
 /** Lắng nghe toàn bộ activity log từ Firebase */
 function setupActivityLogListener() {
@@ -711,6 +699,35 @@ function onConnectFail(resp) {
   setTimeout(connectMqtt, 5000);
 }
 
+function showWarningToast(boxId, scheduledTime) {
+  const prev = document.getElementById('webWarningToast');
+  if (prev) prev.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'webWarningToast';
+  toast.className = 'early-warning-toast';
+  toast.innerHTML = `
+    <div class="ewt-icon">🚨</div>
+    <div class="ewt-body">
+      <div class="ewt-title">Cảnh báo lấy thuốc sớm!</div>
+      <div class="ewt-msg">
+        Bạn vừa lấy thuốc tại <strong>Hộp ${boxId}</strong> khi <strong>chưa đến giờ uống</strong> (Giờ quy định: ${scheduledTime}).
+      </div>
+    </div>
+    <button class="ewt-close" onclick="this.parentElement.remove()">✕</button>
+  `;
+  document.body.appendChild(toast);
+
+  // Tự động xóa sau 8 giây
+  setTimeout(() => {
+    if (toast.isConnected) {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(-20px)';
+      setTimeout(() => toast.remove(), 400);
+    }
+  }, 8000);
+}
+
 function handleMqttMessage(topic, payload) {
   // ── Trạng thái hộp: esp/h1 .. esp/h4 ──
   const boxIdx = TOPICS_STATUS.indexOf(topic);
@@ -733,7 +750,14 @@ function handleMqttMessage(topic, payload) {
 
     // Phát hiện has → empty = đã lấy thuốc ra (tự động)
     if (prevStatus === 'has' && box.status === 'empty') {
-      addLog(`${box.label}: đã lấy thuốc ra ⚠`, 'warn');
+      const assigned = getBoxAssignedSlot(box.id);
+      if (assigned && !isNearScheduledTime(assigned.time)) {
+        const nowStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
+        addLog(`🚨 Cảnh báo: ${box.label} bị lấy thuốc sớm! (Hiện tại: ${nowStr} | Giờ quy định: ${assigned.time})`, 'error');
+        showWarningToast(box.id, assigned.time);
+      } else {
+        addLog(`${box.label}: đã lấy thuốc đúng giờ ✅`, 'ok');
+      }
       markTaken(box.id, 'auto');
     } else if (prevStatus !== box.status) {
       const logMsg = hasmed
@@ -764,7 +788,6 @@ renderDayDetails();
 // Thiết lập real-time listeners Firebase
 setupBoxListener();
 setupScheduleListener();
-setupDoseLogListener();
 setupActivityLogListener();
 
 // Kết nối MQTT
