@@ -18,11 +18,20 @@ const firebaseConfig = {
 const fbApp = initializeApp(firebaseConfig);
 const db = getDatabase(fbApp);
 
-// Firebase database refs
-const boxesRef = ref(db, 'boxes');        // Trạng thái hộp từ ESP (lần cuối)
-const schedulesRef = ref(db, 'schedules');    // Lịch uống đã gửi
-const doseLogRef = ref(db, 'doseLog');      // Nhật ký đã uống
-const activityLogRef = ref(db, 'activityLog');  // Nhật ký hoạt động
+const accountSelect = document.getElementById('accountSelect');
+let currentAccount = localStorage.getItem('medbox_account') || 'account1';
+if (accountSelect) {
+  accountSelect.value = currentAccount;
+  accountSelect.addEventListener('change', () => {
+    localStorage.setItem('medbox_account', accountSelect.value);
+    window.location.reload();
+  });
+}
+
+// Firebase database refs (có hỗ trợ đa tài khoản)
+const boxesRef = ref(db, `accounts/${currentAccount}/boxes`);
+const schedulesRef = ref(db, `accounts/${currentAccount}/schedules`);
+const activityLogRef = ref(db, `accounts/${currentAccount}/activityLog`);
 
 // ── MQTT CONFIG ───────────────────────────────────────────────────────────────
 const MQTT_HOST = 'broker.hivemq.com';
@@ -43,16 +52,18 @@ const state = {
     { id: 3, label: 'Hộp 3', status: 'unknown', updatedAt: null },
     { id: 4, label: 'Hộp 4', status: 'unknown', updatedAt: null },
   ],
-  timesPerDay: 2,
-  timeSlots: ['07:00', '21:00'],
+  timesPerDay: 1,
+  timeSlots: ['07:00-0', '12:00-0', '19:00-0', '21:00-0'],
   mqttConnected: false,
   sentSchedules: [],
   selectedDate: todayStr(),
   scheduleDate: todayStr(),
-  todayDoseLog: [],      // doseLog entries for today only
-  allActivityLog: [],      // all activityLog entries from Firebase
+  scheduleRepeat: 'none',
+  scheduleRepeat: 'none',
+  allActivityLog: [],      // all activityLog (includes dose data)
   logFilter: 'all',
   logSearch: '',
+  activeAlertBox: -1,    // Box currently triggering an early alert
 };
 
 let client = null;
@@ -71,14 +82,112 @@ const logBox = document.getElementById('logBox');
 const clearLogBtn = document.getElementById('clearLogBtn');
 const sentSchedulesEl = document.getElementById('sentSchedules');
 const scheduleDateEl = document.getElementById('scheduleDate');
+const scheduleRepeatEl = document.getElementById('scheduleRepeat');
 const logTimeline = document.getElementById('logTimeline');
 const logCount = document.getElementById('logCount');
 const logSearchEl = document.getElementById('logSearch');
 const boxesLastUpdate = document.getElementById('boxesLastUpdate');
 
+// Modal Refs
+const alertModal = document.getElementById('alertModal');
+const alertModalIcon = document.getElementById('alertModalIcon');
+const alertModalTitle = document.getElementById('alertModalTitle');
+const alertModalMessage = document.getElementById('alertModalMessage');
+const alertModalHint = document.getElementById('alertModalHint');
+const modalActions = document.getElementById('modalActions');
+const btnSkipAlert = document.getElementById('btnSkipAlert');
+const btnSnoozeAlert = document.getElementById('btnSnoozeAlert');
+
+btnSkipAlert.addEventListener('click', () => {
+  if (state.activeAlertBox !== -1) {
+    const payload = JSON.stringify({ action: "skip", box: state.activeAlertBox });
+    const msg = new Paho.Message(payload);
+    msg.destinationName = "esp/action";
+    client.send(msg);
+    addLog(`Đã bỏ qua cảnh báo Hộp ${state.activeAlertBox}.`, 'ok');
+  }
+  closeAlertModal();
+});
+
+btnSnoozeAlert.addEventListener('click', () => {
+  if (state.activeAlertBox !== -1) {
+    const payload = JSON.stringify({ action: "snooze", box: state.activeAlertBox, minutes: 5 });
+    const msg = new Paho.Message(payload);
+    msg.destinationName = "esp/action";
+    client.send(msg);
+    addLog(`Đã báo uống lại sau 5 phút cho Hộp ${state.activeAlertBox}.`, 'ok');
+  }
+  closeAlertModal();
+});
+
+// Modal click to close
+alertModal.addEventListener('click', (e) => {
+  if (e.target.closest('.modal-content') && e.target.tagName === 'BUTTON') return;
+  if (state.activeAlertBox === -1) {
+    closeAlertModal();
+  } else if (!modalActions || modalActions.style.display === 'none') {
+    alertModalHint.textContent = "Bạn phải trả thuốc vào hộp mới có thể tắt cảnh báo!";
+    alertModalHint.style.color = "var(--red-500)";
+  }
+});
+
+// HÀM: showAlertModal
+// Mục đích: Hiển thị giao diện Popup nổi lên màn hình để cảnh báo khẩn cấp hoặc xác nhận.
+// Tác dụng: Tự động đổi màu (đỏ/xanh/vàng) tùy theo biến type được truyền vào.
+function showAlertModal(title, message, type = 'normal', box = -1) {
+  alertModalTitle.textContent = title;
+  alertModalMessage.textContent = message;
+  alertModal.classList.remove('hidden');
+  state.activeAlertBox = box;
+  
+  if (type === 'early') {
+    alertModalIcon.textContent = "❌";
+    alertModalTitle.style.color = "var(--red-600)";
+    alertModalHint.textContent = "Phải trả lại thuốc vào hộp để tắt cảnh báo";
+    alertModalHint.style.color = "var(--text-secondary)";
+    alertModalHint.style.display = "block";
+    if (modalActions) modalActions.classList.add('hidden');
+  } else if (type === 'missed') {
+    alertModalIcon.textContent = "⚠️";
+    alertModalTitle.style.color = "var(--yellow-600)";
+    alertModalHint.style.display = "none";
+    if (modalActions) {
+      modalActions.classList.remove('hidden');
+      modalActions.style.display = 'flex'; // dự phòng
+    }
+  } else if (type === 'taken') {
+    alertModalIcon.textContent = "✅";
+    alertModalTitle.style.color = "#10b981"; // Màu xanh lá
+    alertModalHint.style.display = "none";
+    if (modalActions) modalActions.classList.add('hidden');
+    setTimeout(closeAlertModal, 3500); // Tự đóng sau 3.5s
+  } else {
+    alertModalIcon.textContent = "⚠️";
+    alertModalTitle.style.color = "var(--yellow-600)";
+    alertModalHint.textContent = "Nhấn vào bất kỳ đâu để đóng";
+    alertModalHint.style.color = "var(--text-secondary)";
+    alertModalHint.classList.remove('hidden');
+    if (modalActions) modalActions.classList.add('hidden');
+    state.activeAlertBox = -1;
+  }
+}
+
+function closeAlertModal() {
+  alertModal.classList.add('hidden');
+  state.activeAlertBox = -1;
+}
+
 // ── HELPERS ───────────────────────────────────────────────────────────────────
+function toLocalISODate(d) {
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return toLocalISODate(new Date());
 }
 
 function fmtTime() {
@@ -87,6 +196,9 @@ function fmtTime() {
     .map(n => String(n).padStart(2, '0')).join(':');
 }
 
+// HÀM: getBoxAssignedSlot
+// Mục đích: Tìm trong lịch uống thuốc xem hộp thuốc này được chỉ định uống vào giờ nào.
+// Tác dụng: Giúp Web App biết được người dùng đang lấy thuốc đúng giờ hay sai giờ.
 function getBoxAssignedSlot(boxId) {
   const slots = state.timeSlots.slice(0, state.timesPerDay);
   if (slots.length === 0) return null;
@@ -179,62 +291,92 @@ function updateBoxCard(idx) {
 
 // ── MARK TAKEN ────────────────────────────────────────────────────────────────
 function markTaken(boxId, source = 'auto') {
-  const now = new Date();
+  // Gộp doseLog vào activityLog
   const entry = {
-    boxId,
+    message: `Hộp ${boxId}: Đã lấy thuốc (${source === 'manual' ? 'thủ công' : 'đúng giờ'})`,
+    type: 'taken',
+    boxId: boxId,
     date: todayStr(),
     takenAt: fmtTime(),
-    timestamp: now.toISOString(),
     status: source,          // 'auto' | 'manual'
+    timestamp: new Date().toISOString()
   };
 
-  push(doseLogRef, entry)
-    .then(() => {
-      addLog(`Hộp ${boxId}: đã uống ✅ (${source === 'manual' ? 'thủ công' : 'tự động'})`, 'ok');
-    })
-    .catch(err => addLog(`Lỗi ghi dose log: ${err.message}`, 'error'));
+  push(activityLogRef, entry)
+    .catch(err => console.error('Firebase save error:', err));
+}
+
+function defaultTimeSlot(index, total) {
+  if (total === 1) return '07:00';
+  if (total === 2) return index === 0 ? '07:00' : '19:00';
+  if (total === 3) return index === 0 ? '07:00' : index === 1 ? '12:00' : '19:00';
+  return index === 0 ? '07:00' : index === 1 ? '12:00' : index === 2 ? '19:00' : '21:00';
+}
+
+function formatSlotStr(s) {
+  if (!s.includes('-')) return s;
+  const [t, b] = s.split('-');
+  if (!b || b === '0') return t;
+  return `${t} (Hộp ${b})`;
 }
 
 // ── TIME SLOTS ────────────────────────────────────────────────────────────────
 function renderTimeSlots() {
   timeSlotsEl.innerHTML = '';
   for (let i = 0; i < state.timesPerDay; i++) {
-    const val = state.timeSlots[i] || defaultTimeSlot(i, state.timesPerDay);
+    const val = state.timeSlots[i] || (defaultTimeSlot(i, state.timesPerDay) + '-0');
+    let timeStr = val;
+    let box = 0;
+    if (val.includes('-')) {
+       let parts = val.split('-');
+       timeStr = parts[0];
+       box = parseInt(parts[1]);
+    }
     const row = document.createElement('div');
     row.className = 'time-slot-row';
     row.innerHTML = `
       <span class="time-slot-label">Lần ${i + 1}</span>
-      <input class="field-input" type="time" value="${val}" data-slot="${i}" style="width:120px" />
+      <input class="field-input time-input" type="time" value="${timeStr}" data-slot="${i}" style="width:120px" />
+      <select class="field-input box-select" data-slot="${i}" style="width:100px; margin-left: 10px;">
+        <option value="0" ${box === 0 ? 'selected' : ''}>Tự động</option>
+        <option value="1" ${box === 1 ? 'selected' : ''}>Hộp 1</option>
+        <option value="2" ${box === 2 ? 'selected' : ''}>Hộp 2</option>
+        <option value="3" ${box === 3 ? 'selected' : ''}>Hộp 3</option>
+        <option value="4" ${box === 4 ? 'selected' : ''}>Hộp 4</option>
+      </select>
     `;
     timeSlotsEl.appendChild(row);
   }
-  state.timeSlots = Array.from({ length: state.timesPerDay }, (_, i) =>
-    state.timeSlots[i] || defaultTimeSlot(i, state.timesPerDay)
-  );
-  timeSlotsEl.querySelectorAll('input[type="time"]').forEach(input => {
-    input.addEventListener('change', e => {
-      const idx = parseInt(e.target.dataset.slot);
-      if (!Number.isNaN(idx)) state.timeSlots[idx] = e.target.value;
-    });
-  });
-}
 
-function defaultTimeSlot(index, total) {
-  if (total === 1) return '08:00';
-  if (total === 2) return index === 0 ? '07:00' : '21:00';
-  const presets = ['07:00', '12:00', '18:00', '21:00', '06:00', '09:00'];
-  return presets[index] ?? `${String(6 + index * 3).padStart(2, '0')}:00`;
+  // Lắng nghe sự kiện change để cập nhật state.timeSlots
+  timeSlotsEl.querySelectorAll('.time-slot-row').forEach((row, idx) => {
+    const timeInput = row.querySelector('.time-input');
+    const boxSelect = row.querySelector('.box-select');
+    const updateVal = () => {
+      state.timeSlots[idx] = `${timeInput.value}-${boxSelect.value}`;
+    };
+    timeInput.addEventListener('change', updateVal);
+    boxSelect.addEventListener('change', updateVal);
+  });
 }
 
 function applyDatePicker() {
   if (!scheduleDateEl) return;
   scheduleDateEl.value = state.scheduleDate;
+  if (scheduleRepeatEl) scheduleRepeatEl.value = state.scheduleRepeat;
+  
   scheduleDateEl.addEventListener('change', () => {
     state.scheduleDate = scheduleDateEl.value;
     state.selectedDate = scheduleDateEl.value;
     renderCalendar();
     renderDayDetails();
   });
+  
+  if (scheduleRepeatEl) {
+    scheduleRepeatEl.addEventListener('change', () => {
+      state.scheduleRepeat = scheduleRepeatEl.value;
+    });
+  }
 }
 
 // ── STEPPER ───────────────────────────────────────────────────────────────────
@@ -258,20 +400,26 @@ function sendSchedule() {
     return;
   }
 
-  timeSlotsEl.querySelectorAll('input[type="time"]').forEach(input => {
-    const idx = parseInt(input.dataset.slot);
-    if (!Number.isNaN(idx)) state.timeSlots[idx] = input.value;
+  // Save values right before sending
+  timeSlotsEl.querySelectorAll('.time-slot-row').forEach((row, idx) => {
+    const timeInput = row.querySelector('.time-input');
+    const boxSelect = row.querySelector('.box-select');
+    state.timeSlots[idx] = `${timeInput.value}-${boxSelect.value}`;
   });
 
   const dateValue = scheduleDateEl?.value || state.scheduleDate;
+  const repeatValue = scheduleRepeatEl?.value || state.scheduleRepeat;
   state.scheduleDate = dateValue;
   state.selectedDate = dateValue;
+  state.scheduleRepeat = repeatValue;
   if (scheduleDateEl) scheduleDateEl.value = dateValue;
+  if (scheduleRepeatEl) scheduleRepeatEl.value = repeatValue;
 
   const payload = JSON.stringify({
     date: dateValue,
     times: state.timesPerDay,
     slots: state.timeSlots.slice(0, state.timesPerDay),
+    repeat: repeatValue,
   });
 
   const msg = new Paho.Message(payload);
@@ -288,12 +436,13 @@ function sendSchedule() {
       time: fmtTime(),
       times: state.timesPerDay,
       slots: state.timeSlots.slice(0, state.timesPerDay),
+      repeat: repeatValue,
       timestamp: new Date().toISOString(),
     });
 
-    // Lưu vào Firebase /schedules
-    push(schedulesRef, scheduleData)
-      .then(() => addLog('Đã lưu lịch vào Firebase ✓', 'ok'))
+    // Lưu vào Firebase /schedules (Ghi đè - set)
+    set(schedulesRef, scheduleData)
+      .then(() => addLog('Đã lưu lịch mới vào Firebase ☁️', 'ok'))
       .catch(err => addLog(`Lỗi lưu Firebase: ${err.message}`, 'error'));
 
   } catch (e) {
@@ -315,11 +464,11 @@ function safeSchedule(schedule) {
   let dateValue = null;
 
   if (typeof schedule?.date === 'string') {
-    const p = new Date(schedule.date);
-    if (!Number.isNaN(p.getTime())) dateValue = p.toISOString().split('T')[0];
+    const p = new Date(schedule.date + "T00:00:00"); // Parse as local
+    if (!Number.isNaN(p.getTime())) dateValue = toLocalISODate(p);
   }
   if (!dateValue && !Number.isNaN(timestamp.getTime())) {
-    dateValue = timestamp.toISOString().split('T')[0];
+    dateValue = toLocalISODate(timestamp);
   }
 
   return {
@@ -327,6 +476,7 @@ function safeSchedule(schedule) {
     time: schedule?.time || '',
     times: typeof schedule?.times === 'number' ? schedule.times : slots.length,
     slots,
+    repeat: schedule?.repeat || 'none',
     timestamp: Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString(),
   };
 }
@@ -341,14 +491,14 @@ function renderSentSchedules() {
   state.sentSchedules.slice(0, 8).forEach(schedule => {
     const slots = Array.isArray(schedule.slots) ? schedule.slots : [];
     const dateLabel = schedule.date
-      || (schedule.timestamp ? schedule.timestamp.split('T')[0] : '---');
+      || (schedule.timestamp ? toLocalISODate(new Date(schedule.timestamp)) : '---');
     const div = document.createElement('div');
     div.className = 'sent-schedule-item';
     div.innerHTML = `
       <div class="sent-schedule-icon">📅</div>
       <div>
         <div class="sent-time">${dateLabel} &nbsp;&middot;&nbsp; Gửi lúc ${schedule.time || '---'}</div>
-        <div class="sent-details">${schedule.times || slots.length} lần/ngày &nbsp;&middot;&nbsp; ${slots.join('  ·  ')}</div>
+        <div class="sent-details">${schedule.times || slots.length} lần/ngày &nbsp;&middot;&nbsp; ${slots.map(formatSlotStr).join('  ·  ')} ${schedule.repeat === 'daily' ? ' (Hàng ngày)' : schedule.repeat === 'weekly' ? ' (Hàng tuần)' : ''}</div>
       </div>
     `;
     sentSchedulesEl.appendChild(div);
@@ -356,6 +506,28 @@ function renderSentSchedules() {
 }
 
 // ── CALENDAR ─────────────────────────────────────────────────────────────────
+function getLatestScheduleForDate(dateStr) {
+  const sorted = [...state.sentSchedules].sort((a, b) => {
+    const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    return tb - ta;
+  });
+
+  for (let s of sorted) {
+    const d = s.date || (s.timestamp ? toLocalISODate(new Date(s.timestamp)) : null);
+    if (!d) continue;
+
+    if (s.repeat === 'daily' && dateStr >= d) return s;
+    if (s.repeat === 'weekly' && dateStr >= d) {
+       const dObj = new Date(d);
+       const targetObj = new Date(dateStr);
+       if (dObj.getDay() === targetObj.getDay()) return s;
+    }
+    if (d === dateStr) return s;
+  }
+  return null;
+}
+
 function renderCalendar() {
   const calendarEl = document.getElementById('calendar');
   const now = new Date();
@@ -384,12 +556,11 @@ function renderCalendar() {
   }
 
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const daysWithSch = getDaysWithSchedules();
   const todayDate = todayStr();
 
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const hasSch = daysWithSch.includes(dateStr);
+    const hasSch = !!getLatestScheduleForDate(dateStr);
     const isToday = dateStr === todayDate;
     const isSelected = dateStr === state.selectedDate;
 
@@ -410,28 +581,6 @@ function renderCalendar() {
   }
 
   calendarEl.appendChild(grid);
-}
-
-function getDaysWithSchedules() {
-  const days = new Set();
-  state.sentSchedules.forEach(s => {
-    const d = s.date || (s.timestamp ? new Date(s.timestamp).toISOString().split('T')[0] : null);
-    if (d) days.add(d);
-  });
-  return Array.from(days);
-}
-
-function getLatestScheduleForDate(date) {
-  return state.sentSchedules
-    .filter(s => {
-      const d = s.date || (s.timestamp ? new Date(s.timestamp).toISOString().split('T')[0] : null);
-      return d === date;
-    })
-    .sort((a, b) => {
-      const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-      const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-      return tb - ta;
-    })[0] || null;
 }
 
 function renderDayDetails() {
@@ -456,10 +605,10 @@ function renderDayDetails() {
       <div class="day-detail-date">${fmtDate}</div>
       <div class="day-detail-info">
         <span>Gửi lúc: ${schedule.time || '---'}</span>
-        <span class="day-detail-times">${schedule.times || slots.length} lần/ngày</span>
+        <span class="day-detail-times">${schedule.times || slots.length} lần/ngày ${schedule.repeat === 'daily' ? ' (Hàng ngày)' : schedule.repeat === 'weekly' ? ' (Hàng tuần)' : ''}</span>
       </div>
       <div class="day-detail-slots">
-        ${slots.map(s => `<span class="slot-chip">🕐 ${s}</span>`).join('')}
+        ${slots.map(s => `<span class="slot-chip">🕐 ${formatSlotStr(s)}</span>`).join('')}
       </div>
     </div>
   `;
@@ -525,7 +674,7 @@ function renderLogTimeline() {
 
   const dayNames = ['Chủ Nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
   const today = todayStr();
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const yesterday = toLocalISODate(new Date(Date.now() - 86400000));
 
   Object.keys(groups)
     .sort((a, b) => b.localeCompare(a))
@@ -547,7 +696,7 @@ function renderLogTimeline() {
       }
       group.appendChild(lbl);
 
-      const typeIcon = { ok: '✅', warn: '⚠️', error: '❌', '': 'ℹ️' };
+      const typeIcon = { ok: '✅', warn: '⚠️', error: '❌', taken: '💊', '': 'ℹ️' };
 
       groups[date]
         .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
@@ -604,10 +753,7 @@ function setupScheduleListener() {
       return;
     }
     const data = snapshot.val();
-    state.sentSchedules = Object.values(data)
-      .map(safeSchedule)
-      .filter(s => s.timestamp !== null)
-      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    state.sentSchedules = [safeSchedule(data)]; // Chỉ lưu 1 bản ghi lịch trình hiện hành
     renderSentSchedules();
     renderCalendar();
     renderDayDetails();
@@ -691,6 +837,7 @@ function onConnect() {
     addLog(`Đăng ký topic: ${topic}`);
   });
   client.subscribe('esp/schedule/ack');
+  client.subscribe('esp/alert');
 }
 
 function onConnectFail(resp) {
@@ -699,35 +846,10 @@ function onConnectFail(resp) {
   setTimeout(connectMqtt, 5000);
 }
 
-function showWarningToast(boxId, scheduledTime) {
-  const prev = document.getElementById('webWarningToast');
-  if (prev) prev.remove();
-
-  const toast = document.createElement('div');
-  toast.id = 'webWarningToast';
-  toast.className = 'early-warning-toast';
-  toast.innerHTML = `
-    <div class="ewt-icon">🚨</div>
-    <div class="ewt-body">
-      <div class="ewt-title">Cảnh báo lấy thuốc sớm!</div>
-      <div class="ewt-msg">
-        Bạn vừa lấy thuốc tại <strong>Hộp ${boxId}</strong> khi <strong>chưa đến giờ uống</strong> (Giờ quy định: ${scheduledTime}).
-      </div>
-    </div>
-    <button class="ewt-close" onclick="this.parentElement.remove()">✕</button>
-  `;
-  document.body.appendChild(toast);
-
-  // Tự động xóa sau 8 giây
-  setTimeout(() => {
-    if (toast.isConnected) {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateY(-20px)';
-      setTimeout(() => toast.remove(), 400);
-    }
-  }, 8000);
-}
-
+// HÀM: handleMqttMessage
+// Mục đích: Xử lý mọi tín hiệu gửi từ ESP32 lên Web thông qua giao thức MQTT.
+// - Tín hiệu hộp thuốc (esp/h1): Hiển thị trạng thái còn/hết thuốc.
+// - Tín hiệu cảnh báo (esp/alert): Hiện Popup đỏ/xanh cảnh báo thao tác.
 function handleMqttMessage(topic, payload) {
   // ── Trạng thái hộp: esp/h1 .. esp/h4 ──
   const boxIdx = TOPICS_STATUS.indexOf(topic);
@@ -738,9 +860,9 @@ function handleMqttMessage(topic, payload) {
     box.status = hasmed ? 'has' : 'empty';
     box.updatedAt = fmtTime();
 
-    // Lưu trạng thái lên Firebase /boxes/boxN
+    // Lưu trạng thái lên Firebase theo đúng nhánh tài khoản
     const boxKey = `box${box.id}`;
-    set(ref(db, `boxes/${boxKey}`), {
+    set(ref(db, `accounts/${currentAccount}/boxes/${boxKey}`), {
       status: box.status,
       updatedAt: new Date().toISOString(),
     }).catch(err => console.warn('Firebase box update error:', err));
@@ -748,22 +870,19 @@ function handleMqttMessage(topic, payload) {
     // Cập nhật card ngay lập tức
     updateBoxCard(boxIdx);
 
-    // Phát hiện has → empty = đã lấy thuốc ra (tự động)
-    if (prevStatus === 'has' && box.status === 'empty') {
-      const assigned = getBoxAssignedSlot(box.id);
-      if (assigned && !isNearScheduledTime(assigned.time)) {
-        const nowStr = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
-        addLog(`🚨 Cảnh báo: ${box.label} bị lấy thuốc sớm! (Hiện tại: ${nowStr} | Giờ quy định: ${assigned.time})`, 'error');
-        showWarningToast(box.id, assigned.time);
-      } else {
-        addLog(`${box.label}: đã lấy thuốc đúng giờ ✅`, 'ok');
-      }
-      markTaken(box.id, 'auto');
-    } else if (prevStatus !== box.status) {
+    // Không còn tự động check lấy sớm tại đây nữa, mọi cảnh báo và ghi log (early, taken) 
+    // đều do ESP32 quyết định và đẩy qua esp/alert.
+    if (prevStatus !== box.status) {
       const logMsg = hasmed
         ? `${box.label}: còn thuốc ✓`
         : `${box.label}: hết thuốc ⚠`;
       addLog(logMsg, hasmed ? 'ok' : 'warn');
+      
+      // Đóng modal cảnh báo sớm nếu hộp này đã được trả thuốc
+      if (hasmed && state.activeAlertBox === box.id) {
+        closeAlertModal();
+        addLog(`Đã trả thuốc vào Hộp ${box.id}. Tắt cảnh báo.`, 'ok');
+      }
     }
     return;
   }
@@ -771,6 +890,29 @@ function handleMqttMessage(topic, payload) {
   // ── ACK từ ESP32 ──
   if (topic === 'esp/schedule/ack') {
     addLog(`ESP32 xác nhận lịch: ${payload}`, 'ok');
+    return;
+  }
+
+  // ── ALERTS TỪ ESP32 ──
+  if (topic === 'esp/alert') {
+    try {
+      const data = JSON.parse(payload);
+      if (data.type === 'early') {
+        showAlertModal('Cảnh báo bất thường!', `Lấy thuốc sai ở Hộp ${data.box}. Vui lòng trả lại thuốc vào hộp ngay lập tức!`, 'early', data.box);
+        addLog(`🚨 ESP32 Alert: Lấy thuốc sớm hộp ${data.box}`, 'error');
+      } else if (data.type === 'missed') {
+        showAlertModal('Bỏ lỡ giờ uống thuốc!', `Đã qua giờ uống thuốc ở Hộp ${data.box} nhưng bạn chưa lấy thuốc!`, 'missed', data.box);
+        addLog(`⚠️ ESP32 Alert: Bỏ lỡ thuốc hộp ${data.box}`, 'warn');
+      } else if (data.type === 'returned') {
+        addLog(`ESP32 Alert: Đã trả lại thuốc hộp ${data.box}.`, 'ok');
+        closeAlertModal();
+      } else if (data.type === 'taken') {
+        showAlertModal('Hoàn thành!', `Đã lấy thuốc đúng giờ ở Hộp ${data.box}.`, 'taken', data.box);
+        markTaken(data.box, 'auto');
+      }
+    } catch (e) {
+      addLog(`Lỗi parse esp/alert: ${e.message}`, 'error');
+    }
     return;
   }
 

@@ -1541,3 +1541,89 @@ main {
     max-width: 100%;
   }
 }
+
+/* --- MODAL CẢNH BÁO --- */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.modal-overlay.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.modal-content {
+  background: var(--surface-bg);
+  border: 1px solid var(--border-color);
+  padding: 32px 24px;
+  border-radius: 24px;
+  width: 90%;
+  max-width: 400px;
+  text-align: center;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transform: translateY(0);
+  transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  animation: modalPop 0.4s ease-out forwards;
+}
+
+.modal-overlay.hidden .modal-content {
+  transform: translateY(20px);
+}
+
+.modal-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  animation: pulseIcon 1.5s infinite;
+}
+
+.modal-title {
+  color: var(--rose);
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.modal-message {
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 1.5;
+  margin-bottom: 24px;
+}
+
+.modal-hint {
+  color: var(--text-secondary);
+  font-size: 14px;
+  opacity: 0.8;
+  animation: flashText 2s infinite;
+}
+
+@keyframes modalPop {
+  0% { transform: scale(0.9); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes pulseIcon {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+@keyframes flashText {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.hidden { display: none !important; }

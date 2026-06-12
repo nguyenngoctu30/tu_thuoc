@@ -50,6 +50,13 @@
         <span id="mqttLabel">Đang kết nối...</span>
       </div>
 
+      <div class="account-selector" style="margin-left: 15px;">
+        <select id="accountSelect" class="field-input" style="padding: 4px 8px; font-size: 14px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); color: white;">
+          <option value="account1">Tài khoản 1</option>
+          <option value="account2">Tài khoản 2</option>
+        </select>
+      </div>
+
     </div>
 
     <nav class="tab-nav">
@@ -118,8 +125,17 @@
               </div>
 
               <div class="config-row">
-                <span class="config-label">Ngày uống</span>
+                <span class="config-label">Ngày bắt đầu</span>
                 <input id="scheduleDate" class="field-input" type="date" />
+              </div>
+
+              <div class="config-row">
+                <span class="config-label">Lặp lại</span>
+                <select id="scheduleRepeat" class="field-input" style="width:120px">
+                  <option value="none">Không</option>
+                  <option value="daily">Hàng ngày</option>
+                  <option value="weekly">Hàng tuần</option>
+                </select>
               </div>
 
               <div class="glass-divider"></div>
@@ -135,7 +151,7 @@
                     <line x1="22" y1="2" x2="11" y2="13" />
                     <polygon points="22 2 15 22 11 13 2 9 22 2" />
                   </svg>
-                  Gửi xuống ESP32
+                  Gửi lịch
                 </button>
                 <span class="send-feedback" id="sendFeedback">✓ Đã gửi</span>
               </div>
@@ -235,7 +251,23 @@
 
   </main>
 
-  <script type="module" src="app.js"></script>
+  <!-- Modal Cảnh Báo -->
+  <div id="alertModal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <div class="modal-icon" id="alertModalIcon">🚨</div>
+      <h2 class="modal-title" id="alertModalTitle">Cảnh báo</h2>
+      <p class="modal-message" id="alertModalMessage">Nội dung cảnh báo</p>
+      
+      <div id="modalActions" class="modal-actions hidden" style="margin-top: 20px; display: flex; gap: 10px; justify-content: center;">
+        <button id="btnSkipAlert" class="btn" style="background: rgba(255,255,255,0.1); color: white;">Bỏ qua</button>
+        <button id="btnSnoozeAlert" class="btn btn--glow">Báo uống lại (5p)</button>
+      </div>
+
+      <div class="modal-hint" id="alertModalHint">Nhấn vào bất kỳ đâu để đóng</div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js?v=3"></script>
 </body>
 
 </html>
